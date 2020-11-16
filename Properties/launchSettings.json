@@ -1,0 +1,8 @@
+{
+  "profiles": {
+    "NESharp": {
+      "commandName": "Project",
+      "nativeDebugging": true
+    }
+  }
+}
