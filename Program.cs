@@ -7,9 +7,8 @@ namespace NESharp
         static void Main(string[] args)
         {
             DisplayEngine display = new DisplayEngine();
-            display.Construct(680, 480, 2, 2);
+            display.Construct(780, 480, 2, 2);
             display.Start();
-
         }
     }
 }

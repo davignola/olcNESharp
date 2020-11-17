@@ -4,11 +4,11 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace NESharp.Chip
+namespace NESharp.Components
 {
     public interface IIODevice
     {
-        void Write(ushort address, byte data);
-        byte Read(ushort address);
+        void CpuWrite(ushort address, byte data);
+        byte CpuRead(ushort address);
     }
 }

@@ -61,7 +61,7 @@ using System.Linq;
 using System.Text;
 using System.Xml;
 
-namespace NESharp.Chip
+namespace NESharp.Components
 {
     public sealed partial class Cpu6502 : IConnectableDevice
     {
@@ -92,7 +92,7 @@ namespace NESharp.Chip
                 string sInst = $"${addr:X}: ";
 
                 // Read instruction, and get its Readable name
-                byte opcode = Bus.Read((ushort)addr);
+                byte opcode = Bus.CpuRead((ushort)addr);
                 addr++;
                 sInst += Lookup[opcode].Name + " ";
 
@@ -107,66 +107,66 @@ namespace NESharp.Chip
                 }
                 else if (Lookup[opcode].AddressModeFunc == IMM)
                 {
-                    value = Bus.Read((ushort)addr); addr++;
+                    value = Bus.CpuRead((ushort)addr); addr++;
                     sInst += $"#${value:X} {{IMM}}";
                 }
                 else if (Lookup[opcode].AddressModeFunc == ZP0)
                 {
-                    lo = Bus.Read((ushort)addr); addr++;
+                    lo = Bus.CpuRead((ushort)addr); addr++;
                     hi = 0x00;
                     sInst += $"${lo:X} {{ZP0}}";
                 }
                 else if (Lookup[opcode].AddressModeFunc == ZPX)
                 {
-                    lo = Bus.Read((ushort)addr); addr++;
+                    lo = Bus.CpuRead((ushort)addr); addr++;
                     hi = 0x00;
                     sInst += $"${lo:X}, X {{ZPX}}";
                 }
                 else if (Lookup[opcode].AddressModeFunc == ZPY)
                 {
-                    lo = Bus.Read((ushort)addr); addr++;
+                    lo = Bus.CpuRead((ushort)addr); addr++;
                     hi = 0x00;
                     sInst += $"${lo:X}, Y {{ZPY}}";
                 }
                 else if (Lookup[opcode].AddressModeFunc == IZX)
                 {
-                    lo = Bus.Read((ushort)addr); addr++;
+                    lo = Bus.CpuRead((ushort)addr); addr++;
                     hi = 0x00;
                     sInst += $"(${lo:X}, X) {{IZX}}";
                 }
                 else if (Lookup[opcode].AddressModeFunc == IZY)
                 {
-                    lo = Bus.Read((ushort)addr); addr++;
+                    lo = Bus.CpuRead((ushort)addr); addr++;
                     hi = 0x00;
                     sInst += $"(${lo:X}), Y {{IZY}}";
                 }
                 else if (Lookup[opcode].AddressModeFunc == ABS)
                 {
-                    lo = Bus.Read((ushort)addr); addr++;
-                    hi = Bus.Read((ushort)addr); addr++;
+                    lo = Bus.CpuRead((ushort)addr); addr++;
+                    hi = Bus.CpuRead((ushort)addr); addr++;
                     sInst += $"${(hi << 8) | lo:X} {{ABS}}";
                 }
                 else if (Lookup[opcode].AddressModeFunc == ABX)
                 {
-                    lo = Bus.Read((ushort)addr); addr++;
-                    hi = Bus.Read((ushort)addr); addr++;
+                    lo = Bus.CpuRead((ushort)addr); addr++;
+                    hi = Bus.CpuRead((ushort)addr); addr++;
                     sInst += $"${(hi << 8) | lo:X}, X {{ABX}}";
                 }
                 else if (Lookup[opcode].AddressModeFunc == ABY)
                 {
-                    lo = Bus.Read((ushort)addr); addr++;
-                    hi = Bus.Read((ushort)addr); addr++;
+                    lo = Bus.CpuRead((ushort)addr); addr++;
+                    hi = Bus.CpuRead((ushort)addr); addr++;
                     sInst += $"${(hi << 8) | lo:X}, Y {{ABY}}";
                 }
                 else if (Lookup[opcode].AddressModeFunc == IND)
                 {
-                    lo = Bus.Read((ushort)addr); addr++;
-                    hi = Bus.Read((ushort)addr); addr++;
+                    lo = Bus.CpuRead((ushort)addr); addr++;
+                    hi = Bus.CpuRead((ushort)addr); addr++;
                     sInst += $"(${(hi << 8) | lo:X}) {{IND}}";
                 }
                 else if (Lookup[opcode].AddressModeFunc == REL)
                 {
-                    value = Bus.Read((ushort)addr); addr++;
+                    value = Bus.CpuRead((ushort)addr); addr++;
                     sInst += $"${value:X} [${addr + value:X}] {{REL}}";
                 }
 

@@ -62,7 +62,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Xml;
 
-namespace NESharp.Chip
+namespace NESharp.Components
 {
     public sealed partial class Cpu6502 : IConnectableDevice
     {
@@ -292,7 +292,7 @@ namespace NESharp.Chip
                 // Read next instruction byte. This 8-bit value is used to index
                 // the translation table to get the relevant information about
                 // how to implement the instruction
-                opcode = Read(Pc);
+                opcode = CpuRead(Pc);
 
                 // Always set the unused status flag bit to 1
                 Status |= FLAGS6502.U;
@@ -340,7 +340,7 @@ namespace NESharp.Chip
 
         private void PushStack(byte value)
         {
-            Write((ushort)(STACK_ADDRESS_HIGH_BYTE_MASK + StkPtr), value);
+            CpuWrite((ushort)(STACK_ADDRESS_HIGH_BYTE_MASK + StkPtr), value);
             StkPtr--;
         }
 
@@ -353,7 +353,7 @@ namespace NESharp.Chip
         private byte PopStack()
         {
             StkPtr++;
-            return Read((ushort)(STACK_ADDRESS_HIGH_BYTE_MASK + StkPtr));
+            return CpuRead((ushort)(STACK_ADDRESS_HIGH_BYTE_MASK + StkPtr));
         }
 
         private void PopStackToPc()
@@ -367,8 +367,8 @@ namespace NESharp.Chip
         private ushort ReadAsAddress(ushort startAddress)
         {
             addr_abs = startAddress;
-            ushort low = Read((ushort)(addr_abs + 0));
-            ushort high = Read((ushort)(addr_abs + 1));
+            ushort low = CpuRead((ushort)(addr_abs + 0));
+            ushort high = CpuRead((ushort)(addr_abs + 1));
 
             // return the result as an address
             return (ushort)((high << 8) | low);
@@ -380,7 +380,7 @@ namespace NESharp.Chip
         /// <returns></returns>
         private byte ReadPc()
         {
-            return Read(Pc++);
+            return CpuRead(Pc++);
         }
 
         /// <summary>
@@ -408,5 +408,38 @@ namespace NESharp.Chip
 
         #endregion
 
+        #region IODevice impl
+
+        /// <summary>
+        /// Write to bus
+        /// </summary>
+        /// <param name="address"></param>
+        /// <param name="data"></param>
+        public void CpuWrite(ushort address, byte data)
+        {
+            Bus.CpuWrite(address, data);
+        }
+
+
+        /// <summary>
+        /// Read from bus
+        /// </summary>
+        /// <param name="address"></param>
+        /// <returns></returns>
+        public byte CpuRead(ushort address)
+        {
+            return Bus.CpuRead(address);
+        }
+
+        /// <summary>
+        /// Link to the bus we are attached to.
+        /// Invoked by the bus 
+        /// </summary>
+        /// <param name="bus"></param>
+        public void ConnectBus(IIODevice bus)
+        {
+            Bus = bus;
+        }
+        #endregion
     }
 }

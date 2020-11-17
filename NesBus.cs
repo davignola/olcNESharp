@@ -60,14 +60,17 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using NESharp.Chip;
+using NESharp.Components;
 
 namespace NESharp
 {
     public sealed class NesBus : IIODevice
     {
+        private int SystemClockCounter { get; set; } = 0;
         public Cpu6502 Cpu6502 { get; private set; }
+        public Ppu2C02 Ppu2C02 { get; private set; }
         public List<byte> Ram { get; private set; }
+        public Cartridge Cartridge { get; private set; }
 
         public NesBus()
         {
@@ -75,26 +78,98 @@ namespace NESharp
             Cpu6502 = new Cpu6502();
             Cpu6502.ConnectBus(this);
 
-            // init RAM
-            Ram = Enumerable.Repeat((byte)0, 64 * 1024).ToList();
+            Ppu2C02 = new Ppu2C02();
+            Ppu2C02.ConnectBus(this);
+
+            // init 2k RAM
+            Ram = Enumerable.Repeat((byte)0, 2 * 1024).ToList();
         }
 
-        public void Write(ushort address, byte data)
+        public void InsertCartridge(Cartridge cartridge)
         {
-            if (address >= 0x0000 && address <= 0xFFFF)
+            Cartridge = cartridge;
+            Ppu2C02.ConnectCartridge(cartridge);
+        }
+
+        public void Reset()
+        {
+            Cpu6502.Reset();
+            SystemClockCounter = 0;
+        }
+
+        public void Clock()
+        {
+            // Clocking. The heart and soul of an emulator. The running
+            // frequency is controlled by whatever calls this function.
+            // So here we "divide" the clock as necessary and call
+            // the peripheral devices clock() function at the correct
+            // times.
+
+            // The fastest clock frequency the digital system cares
+            // about is equivalent to the PPU clock. So the PPU is clocked
+            // each time this function is called.
+            Ppu2C02.Clock();
+
+            // The CPU runs 3 times slower than the PPU so we only call its
+            // clock() function every 3 times this function is called. We
+            // have a global counter to keep track of this.
+            if (SystemClockCounter % 3 == 0)
             {
-                Ram[address] = data;
+                Cpu6502.Clock();
+            }
+
+            SystemClockCounter++;
+        }
+
+        public void CpuWrite(ushort address, byte data)
+        {
+            // The cartridge "sees all" and has the facility to veto
+            // the propagation of the bus transaction if it requires.
+            // This allows the cartridge to map any address to some
+            // other data, including the facility to divert transactions
+            // with other physical devices. The NES does not do this
+            // but I figured it might be quite a flexible way of adding
+            // "custom" hardware to the NES in the future!
+            if (Cartridge.CpuWrite(address, data)) { return; }
+
+            if (address >= 0x0000 && address <= 0x1FFF)
+            {
+                // System RAM Address Range. The range covers 8KB, though
+                // there is only 2KB available. That 2KB is "mirrored"
+                // through this address range. Using bitwise AND to mask
+                // the bottom 11 bits is the same as addr % 2048.
+                Ram[address & 0x07FF] = data;
+            }
+            else if (address >= 0x2000 && address <= 0x3FFF)
+            {
+                // PPU Address range. The PPU only has 8 primary registers
+                // and these are repeated throughout this range. We can
+                // use bitwise AND operation to mask the bottom 3 bits, 
+                // which is the equivalent of addr % 8.
+                //ppu.cpuWrite(address & 0x0007, data);
             }
         }
 
-        public byte Read(ushort address)
+        public byte CpuRead(ushort address)
         {
-            if (address >= 0x0000 && address <= 0xFFFF)
+            byte data = 0x00;
+
+            // Cartridge Address Range
+            if (Cartridge.CpuRead(address, ref data)) { return data; }
+
+
+            if (address >= 0x0000 && address <= 0x1FFF)
             {
-                return Ram[address];
+                // System RAM Address Range, mirrored every 2048
+                data = Ram[address & 0x07FF];
+            }
+            else if (address >= 0x2000 && address <= 0x3FFF)
+            {
+                // PPU Address range, mirrored every 8
+                //data = ppu.cpuRead(addr & 0x0007, bReadOnly);
             }
 
-            return 0x00;
+            return data;
         }
     }
 }

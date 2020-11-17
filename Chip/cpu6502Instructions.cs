@@ -62,7 +62,7 @@ using System.Text;
 using System.Threading.Tasks;
 using System.Xml;
 
-namespace NESharp.Chip
+namespace NESharp.Components
 {
     public sealed partial class Cpu6502 : IConnectableDevice
     {
@@ -115,7 +115,7 @@ namespace NESharp.Chip
         /// <returns></returns>
         public byte ZP0()
         {
-            addr_abs = Read(Pc);
+            addr_abs = CpuRead(Pc);
             Pc++;
             addr_abs &= 0x00FF;
             return 0;
@@ -236,11 +236,11 @@ namespace NESharp.Chip
 
             if ((pointer & 0x00FF) == 0x00FF) // Simulate page boundary hardware bug
             {
-                addr_abs = (ushort)((Read((ushort)(pointer & 0xFF00)) << 8) | Read((ushort)(pointer + 0)));
+                addr_abs = (ushort)((CpuRead((ushort)(pointer & 0xFF00)) << 8) | CpuRead((ushort)(pointer + 0)));
             }
             else // Behave normally
             {
-                addr_abs = (ushort)((Read((ushort)(pointer + 1)) << 8) | Read((ushort)(pointer + 0)));
+                addr_abs = (ushort)((CpuRead((ushort)(pointer + 1)) << 8) | CpuRead((ushort)(pointer + 0)));
             }
 
             return 0;
@@ -296,7 +296,7 @@ namespace NESharp.Chip
         {
             if (Lookup[opcode].AddressModeFunc != IMP)
             {
-                fetched = Read(addr_abs);
+                fetched = CpuRead(addr_abs);
             }
             return fetched;
         }
@@ -414,7 +414,7 @@ namespace NESharp.Chip
             if (Lookup[opcode].AddressModeFunc == IMP)
                 A = (byte)(temp & 0x00FF);
             else
-                Write(addr_abs, (byte)(temp & 0x00FF));
+                CpuWrite(addr_abs, (byte)(temp & 0x00FF));
             return 0;
         }
 
@@ -727,7 +727,7 @@ namespace NESharp.Chip
         {
             Fetch();
             temp = (ushort)(fetched - 1);
-            Write(addr_abs, (byte)(temp & 0x00FF));
+            CpuWrite(addr_abs, (byte)(temp & 0x00FF));
             SetFlag(FLAGS6502.Z, (temp & 0x00FF) == 0);
             SetFlag(FLAGS6502.N, (temp & 0x0080) != 0);
             return 0;
@@ -786,7 +786,7 @@ namespace NESharp.Chip
         {
             Fetch();
             temp = (ushort)(fetched + 1);
-            Write(addr_abs, (byte)temp);
+            CpuWrite(addr_abs, (byte)temp);
             SetFlag(FLAGS6502.Z, (temp & 0x00FF) == 0);
             SetFlag(FLAGS6502.N, (temp & 0x0080) != 0);
             return 0;
@@ -904,7 +904,7 @@ namespace NESharp.Chip
             if (Lookup[opcode].AddressModeFunc == IMP)
                 A = (byte)temp;
             else
-                Write(addr_abs, (byte)temp);
+                CpuWrite(addr_abs, (byte)temp);
             return 0;
         }
 
@@ -1012,7 +1012,7 @@ namespace NESharp.Chip
             }
             else
             {
-                Write(addr_abs, (byte)temp);
+                CpuWrite(addr_abs, (byte)temp);
             }
             return 0;
         }
@@ -1034,7 +1034,7 @@ namespace NESharp.Chip
             }
             else
             {
-                Write(addr_abs, (byte)temp);
+                CpuWrite(addr_abs, (byte)temp);
             }
             return 0;
         }
@@ -1104,7 +1104,7 @@ namespace NESharp.Chip
         /// <returns></returns>
         private byte STA()
         {
-            Write(addr_abs, A);
+            CpuWrite(addr_abs, A);
             return 0;
         }
 
@@ -1115,7 +1115,7 @@ namespace NESharp.Chip
         /// <returns></returns>
         private byte STX()
         {
-            Write(addr_abs, X);
+            CpuWrite(addr_abs, X);
             return 0;
         }
 
@@ -1126,7 +1126,7 @@ namespace NESharp.Chip
         /// <returns></returns>
         private byte STY()
         {
-            Write(addr_abs, Y);
+            CpuWrite(addr_abs, Y);
             return 0;
         }
 
@@ -1236,38 +1236,5 @@ namespace NESharp.Chip
 
         #endregion
 
-        #region IODevice impl
-
-        /// <summary>
-        /// Write to bus
-        /// </summary>
-        /// <param name="address"></param>
-        /// <param name="data"></param>
-        public void Write(ushort address, byte data)
-        {
-            Bus.Write(address, data);
-        }
-
-
-        /// <summary>
-        /// Read from bus
-        /// </summary>
-        /// <param name="address"></param>
-        /// <returns></returns>
-        public byte Read(ushort address)
-        {
-            return Bus.Read(address);
-        }
-
-        /// <summary>
-        /// Link to the bus we are attached to.
-        /// Invoked by the bus 
-        /// </summary>
-        /// <param name="bus"></param>
-        public void ConnectBus(IIODevice bus)
-        {
-            Bus = bus;
-        }
-        #endregion
     }
 }

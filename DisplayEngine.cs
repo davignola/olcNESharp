@@ -60,15 +60,18 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
-using NESharp.Chip;
+using NESharp.Components;
 using olc.wrapper;
 
 namespace NESharp
 {
     public class DisplayEngine : PixelGameEngineManaged
     {
+        private Cartridge cartridge;
         private NesBus nes = new NesBus();
         Dictionary<ushort, string> mapAsm;
+        private bool emulationRun = false;
+        private float fResidualTime = 0.0f;
 
         string hex(uint n, byte d)
         {
@@ -83,7 +86,7 @@ namespace NESharp
                 string sOffset = "$" + hex(nAddr, 4) + ":";
                 for (int col = 0; col < nColumns; col++)
                 {
-                    sOffset += " " + hex(nes.Read(nAddr), 2);
+                    sOffset += " " + hex(nes.CpuRead(nAddr), 2);
                     nAddr += 1;
                 }
                 DrawString(nRamX, nRamY, sOffset);
@@ -109,7 +112,7 @@ namespace NESharp
             DrawString(x, y + 50, "Stack P: $" + hex(nes.Cpu6502.StkPtr, 4));
         }
 
-        // TODO: HORRIBLE CODE, that did not ported well, I will rewrite this in future parts
+        // TODO: HORRIBLE CODE, that did not port well, I will rewrite this in future parts
         void DrawCode(int x, int y, int nLines)
         {
             var lastIdx = mapAsm.Last().Key;
@@ -142,19 +145,12 @@ namespace NESharp
 
         public override bool OnUserCreate()
         {
-            var program = "A2 0A 8E 00 00 A2 03 8E 01 00 AC 00 00 A9 00 18 6D 01 00 88 D0 FA 8D 02 00 EA EA EA";
+            // Load the cartridge
+            cartridge = new Cartridge("../../../../TestRoms/nestest.nes");
+            if (!cartridge.IsImageValid) { return false; }
 
-            ushort nOffset = 0x8000;
-            foreach (var b in program.Split(' ').Select(s => Convert.ToInt32(s, 16)))
-            {
-                nes.Ram[nOffset++] = (byte)b;
-            }
-
-            // Set Reset Vector
-            nes.Ram[0xFFFC] = 0x00;
-            nes.Ram[0xFFFD] = 0x80;
-
-            // Dont forget to set IRQ and NMI vectors if you want to play with those
+            // Insert into NES
+            nes.InsertCartridge(cartridge);
 
             // Extract dissassembly
             mapAsm = nes.Cpu6502.Disassemble(0x0000, 0xFFFF);
@@ -167,40 +163,52 @@ namespace NESharp
         {
             Clear(PixelColor.DARK_BLUE);
 
-            if (GetKey(KeyManaged.SPACE).bPressed)
+            if (emulationRun)
             {
-                do
+                if (fResidualTime > 0.0f)
+                    fResidualTime -= fElapsedTime;
+                else
                 {
-                    nes.Cpu6502.Clock();
+                    fResidualTime += (1.0f / 60.0f) - fElapsedTime;
+                    do { nes.Clock(); } while (!nes.Ppu2C02.HasCompletedFrame);
+                    nes.Ppu2C02.HasCompletedFrame = false;
                 }
-                while (!nes.Cpu6502.HasCompletedCycle);
             }
-
-            if (GetKey(KeyManaged.R).bPressed)
+            else
             {
-                nes.Cpu6502.Reset();
+                // Emulate code step-by-step
+                if (GetKey(KeyManaged.C).bPressed())
+                {
+                    // Clock enough times to execute a whole CPU instruction
+                    do { nes.Clock(); } while (!nes.Cpu6502.HasCompletedCycle);
+                    // CPU clock runs slower than system clock, so it may be
+                    // complete for additional system clock cycles. Drain
+                    // those out
+                    do { nes.Clock(); } while (nes.Cpu6502.HasCompletedCycle);
+                }
+
+                // Emulate one whole frame
+                if (GetKey(KeyManaged.F).bPressed())
+                {
+                    // Clock enough times to draw a single frame
+                    do { nes.Clock(); } while (!nes.Ppu2C02.HasCompletedFrame);
+                    // Use residual clock cycles to complete current instruction
+                    do { nes.Clock(); } while (!nes.Cpu6502.HasCompletedCycle);
+                    // Reset frame completion flag
+                    nes.Ppu2C02.HasCompletedFrame = false;
+                }
             }
 
-            if (GetKey(KeyManaged.I).bPressed)
-            {
-                nes.Cpu6502.IRQ();
-            }
 
-            if (GetKey(KeyManaged.N).bPressed)
-            {
-                nes.Cpu6502.NMI();
-            }
+            if (GetKey(KeyManaged.SPACE).bPressed()) { emulationRun = !emulationRun; }
+            if (GetKey(KeyManaged.R).bPressed()) { nes.Reset(); }
 
-            // Draw Ram Page 0x00		
-            DrawRam(2, 2, 0x0000, 16, 16);
-            DrawRam(2, 182, 0x8000, 16, 16);
-            DrawCpu(448, 2);
-            DrawCode(448, 72, 26);
+            DrawCpu(516, 2);
+            DrawCode(516, 72, 26);
 
-
-            DrawString(10, 370, "SPACE = Step Instruction    R = RESET    I = IRQ    N = NMI");
-
+            DrawSprite(0, 0, nes.Ppu2C02.GetScreen(), 2);
             return true;
+
         }
 
         public override bool OnUserDestroy()

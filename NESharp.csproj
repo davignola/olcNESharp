@@ -7,6 +7,12 @@
   </PropertyGroup>
 
   <ItemGroup>
+    <Compile Remove="TestRoms\**" />
+    <EmbeddedResource Remove="TestRoms\**" />
+    <None Remove="TestRoms\**" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\olcPixelGameEngine\PixelGameEngineManaged\olcPixelgameEngineManaged.vcxproj" />
   </ItemGroup>
 
