@@ -57,6 +57,7 @@
 */
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -72,10 +73,12 @@ namespace NESharp
         Dictionary<ushort, string> mapAsm;
         private bool emulationRun = false;
         private float fResidualTime = 0.0f;
+        private byte nSelectedPalette = 0x00;
+        private bool breakFrameCycle = false;
 
         string hex(uint n, byte d)
         {
-            return $"{n:X}";
+            return $"{n:X2}";
         }
 
         private void DrawRam(int x, int y, ushort nAddr, int nRows, int nColumns)
@@ -86,7 +89,7 @@ namespace NESharp
                 string sOffset = "$" + hex(nAddr, 4) + ":";
                 for (int col = 0; col < nColumns; col++)
                 {
-                    sOffset += " " + hex(nes.CpuRead(nAddr), 2);
+                    sOffset += " " + hex(nes.CpuRead(nAddr, true), 2);
                     nAddr += 1;
                 }
                 DrawString(nRamX, nRamY, sOffset);
@@ -143,25 +146,79 @@ namespace NESharp
             }
         }
 
+        private void DrawGraphicsData()
+        {
+            // Draw Palettes & Pattern Tables ==============================================
+            const int nSwatchSize = 6;
+            for (byte p = 0; p < 8; p++) // For each palette
+            for (byte s = 0; s < 4; s++) // For each index
+                FillRect(516 + p * (nSwatchSize * 5) + s * nSwatchSize, 340, nSwatchSize, nSwatchSize, nes.Ppu2C02.GetColourFromPaletteRam(p, s));
+
+            // Draw selection reticule around selected palette
+            DrawRect(516 + nSelectedPalette * (nSwatchSize * 5) - 1, 339, (nSwatchSize * 4), nSwatchSize, PixelColor.WHITE);
+
+            // Generate Pattern Tables
+            DrawSprite(516, 348, nes.Ppu2C02.GetPatternTable(0, nSelectedPalette));
+            DrawSprite(648, 348, nes.Ppu2C02.GetPatternTable(1, nSelectedPalette));
+        }
+
         public override bool OnUserCreate()
         {
             // Load the cartridge
-            cartridge = new Cartridge("../../../../TestRoms/nestest.nes");
+            cartridge = new Cartridge("../../../../TestRoms/color_test.nes");
             if (!cartridge.IsImageValid) { return false; }
 
             // Insert into NES
             nes.InsertCartridge(cartridge);
 
             // Extract dissassembly
-            mapAsm = nes.Cpu6502.Disassemble(0x0000, 0xFFFF);
+            mapAsm = nes.Cpu6502.Disassemble(0x8000, 0xFFFF);
 
             nes.Cpu6502.Reset();
             return true;
         }
 
+
         public override bool OnUserUpdate(float fElapsedTime)
         {
             Clear(PixelColor.DARK_BLUE);
+
+            // Sneaky peek of controller input in next video! ;P
+            nes.Controller[0] = 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.X).bHeld() ? 0x80 : 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.Z).bHeld() ? 0x40 : 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.A).bHeld() ? 0x20 : 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.S).bHeld() ? 0x10 : 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.UP).bHeld() ? 0x08 : 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.DOWN).bHeld() ? 0x04 : 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.LEFT).bHeld() ? 0x02 : 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.RIGHT).bHeld() ? 0x01 : 0x00;
+
+            if (GetKey(KeyManaged.SPACE).bPressed())
+            {
+                emulationRun = !emulationRun;
+                breakFrameCycle = false;
+            }
+            if (GetKey(KeyManaged.R).bPressed()) nes.Reset();
+            if (GetKey(KeyManaged.P).bPressed())
+            {
+                nSelectedPalette++;
+                nSelectedPalette &= 0x07;
+            }
+
+            if (GetKey(KeyManaged.T).bPressed())
+            {
+                // enter nestest in no graphics mode
+                nes.Reset(true);
+                nes.Cpu6502.DebugEnabled = true;
+                nes.Cpu6502.Pc = 0xC000;
+                nes.Cpu6502.DebugBreakPc = 0xC6BC;
+                nes.Cpu6502.DebugPcHitCallback = () =>
+                {
+                    emulationRun = false;
+                    breakFrameCycle = true;
+                };
+            }
 
             if (emulationRun)
             {
@@ -170,7 +227,7 @@ namespace NESharp
                 else
                 {
                     fResidualTime += (1.0f / 60.0f) - fElapsedTime;
-                    do { nes.Clock(); } while (!nes.Ppu2C02.HasCompletedFrame);
+                    do { nes.Clock(); } while (!nes.Ppu2C02.HasCompletedFrame && !breakFrameCycle);
                     nes.Ppu2C02.HasCompletedFrame = false;
                 }
             }
@@ -200,16 +257,28 @@ namespace NESharp
             }
 
 
-            if (GetKey(KeyManaged.SPACE).bPressed()) { emulationRun = !emulationRun; }
-            if (GetKey(KeyManaged.R).bPressed()) { nes.Reset(); }
-
             DrawCpu(516, 2);
             DrawCode(516, 72, 26);
 
-            DrawSprite(0, 0, nes.Ppu2C02.GetScreen(), 2);
+            if (nes.Cpu6502.DebugEnabled)
+            {
+                // Draw Ram Page 0x00		
+                DrawRam(2, 2, 0x0000, 16, 16);
+                DrawRam(2, 182, 0x8000, 16, 16);
+            }
+            else
+            {
+                DrawGraphicsData();
+
+                // Draw rendered output ========================================================
+                DrawSprite(0, 0, nes.Ppu2C02.GetScreen(), 2);
+            }
+
+
             return true;
 
         }
+
 
         public override bool OnUserDestroy()
         {

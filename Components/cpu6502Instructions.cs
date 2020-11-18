@@ -115,7 +115,7 @@ namespace NESharp.Components
         /// <returns></returns>
         public byte ZP0()
         {
-            addr_abs = CpuRead(Pc);
+            addr_abs = CpuRead(Pc, false);
             Pc++;
             addr_abs &= 0x00FF;
             return 0;
@@ -236,11 +236,11 @@ namespace NESharp.Components
 
             if ((pointer & 0x00FF) == 0x00FF) // Simulate page boundary hardware bug
             {
-                addr_abs = (ushort)((CpuRead((ushort)(pointer & 0xFF00)) << 8) | CpuRead((ushort)(pointer + 0)));
+                addr_abs = (ushort)((CpuRead((ushort)(pointer & 0xFF00), false) << 8) | CpuRead((ushort)(pointer + 0), false));
             }
             else // Behave normally
             {
-                addr_abs = (ushort)((CpuRead((ushort)(pointer + 1)) << 8) | CpuRead((ushort)(pointer + 0)));
+                addr_abs = (ushort)((CpuRead((ushort)(pointer + 1), false) << 8) | CpuRead((ushort)(pointer + 0), false));
             }
 
             return 0;
@@ -255,8 +255,8 @@ namespace NESharp.Components
         /// <returns></returns>
         public byte IZX()
         {
-            ushort t = ReadPc();
-            addr_abs = ReadAsAddress((ushort)(t + X));
+            byte t = ReadPc();
+            addr_abs = ReadAsAddress((byte)(t + X));
             return 0;
         }
 
@@ -270,9 +270,22 @@ namespace NESharp.Components
         /// <returns></returns>
         public byte IZY()
         {
-            ushort t = ReadPc();
-            addr_abs = ReadAsAddress((ushort)(t + Y));
-            return 0;
+            byte t = ReadPc();
+            byte lo = CpuRead((ushort)(t & 0x00FF), false);
+            // The high byte read is limited to an address of 8 bit range in this specific case !
+            byte hi = CpuRead((ushort)((t + 1) & 0x00FF), false);
+
+            addr_abs = (ushort)((hi << 8) | lo);
+            addr_abs += Y;
+
+            if ((addr_abs & 0xFF00) != (hi << 8))
+            {
+                return 1;
+            }
+            else
+            {
+                return 0;
+            }
         }
 
         #endregion
@@ -296,7 +309,7 @@ namespace NESharp.Components
         {
             if (Lookup[opcode].AddressModeFunc != IMP)
             {
-                fetched = CpuRead(addr_abs);
+                fetched = CpuRead(addr_abs, false);
             }
             return fetched;
         }
@@ -374,10 +387,10 @@ namespace NESharp.Components
             ushort value = (ushort)(fetched ^ 0x00FF);
 
             // Notice this is exactly the same as addition from here!
-            temp = (ushort)(A + fetched + (Status.HasFlag(FLAGS6502.C) ? 1 : 0));
-            SetFlag(FLAGS6502.C, temp > 255);
+            temp = (ushort)(A + value + (Status.HasFlag(FLAGS6502.C) ? 1 : 0));
+            SetFlag(FLAGS6502.C, (temp & 0xFF00) != 0);
             SetFlag(FLAGS6502.Z, (temp & 0x00FF) == 0);
-            SetFlag(FLAGS6502.V, ((~(A ^ fetched) & (A ^ temp)) & 0x0080) != 0);
+            SetFlag(FLAGS6502.V, (ushort)((temp ^ A) & (temp ^ value) & 0x0080) != 0);
             SetFlag(FLAGS6502.N, (temp & 0x80) != 0);
             A = (byte)(temp & 0x00FF);
             return 1;
@@ -678,7 +691,7 @@ namespace NESharp.Components
         public byte CMP()
         {
             Fetch();
-            temp = (ushort)(A & fetched);
+            temp = (ushort)(A - fetched);
             SetFlag(FLAGS6502.C, A >= fetched);
             SetFlag(FLAGS6502.Z, (temp & 0x00FF) == 0);
             SetFlag(FLAGS6502.N, (temp & 0x0080) != 0);
@@ -694,7 +707,7 @@ namespace NESharp.Components
         public byte CPX()
         {
             Fetch();
-            temp = (ushort)(X & fetched);
+            temp = (ushort)(X - fetched);
             SetFlag(FLAGS6502.C, X >= fetched);
             SetFlag(FLAGS6502.Z, (temp & 0x00FF) == 0);
             SetFlag(FLAGS6502.N, (temp & 0x0080) != 0);
@@ -710,7 +723,7 @@ namespace NESharp.Components
         public byte CPY()
         {
             Fetch();
-            temp = (ushort)(Y & fetched);
+            temp = (ushort)(Y - fetched);
             SetFlag(FLAGS6502.C, Y >= fetched);
             SetFlag(FLAGS6502.Z, (temp & 0x00FF) == 0);
             SetFlag(FLAGS6502.N, (temp & 0x0080) != 0);
@@ -855,7 +868,7 @@ namespace NESharp.Components
         {
             Fetch();
             A = fetched;
-            SetFlag(FLAGS6502.Z, (A & 0x00FF) == 0);
+            SetFlag(FLAGS6502.Z, A == 0);
             SetFlag(FLAGS6502.N, (A & 0x0080) != 0);
             return 1;
         }
@@ -870,7 +883,7 @@ namespace NESharp.Components
         {
             Fetch();
             X = fetched;
-            SetFlag(FLAGS6502.Z, (X & 0x00FF) == 0);
+            SetFlag(FLAGS6502.Z, X == 0);
             SetFlag(FLAGS6502.N, (X & 0x0080) != 0);
             return 1;
         }
@@ -885,7 +898,7 @@ namespace NESharp.Components
         {
             Fetch();
             Y = fetched;
-            SetFlag(FLAGS6502.Z, (Y & 0x00FF) == 0);
+            SetFlag(FLAGS6502.Z, Y == 0);
             SetFlag(FLAGS6502.N, (Y & 0x0080) != 0);
             return 1;
         }
@@ -986,11 +999,12 @@ namespace NESharp.Components
         /// <summary>
         /// Instruction: Pop Status Register off Stack
         /// Function:    Status <- stack
+        /// PLP and RTI ignores bit 4 and 5
         /// </summary>
         /// <returns></returns>
         private byte PLP()
         {
-            Status = (FLAGS6502)PopStack();
+            Status |= (FLAGS6502)(PopStack() & 0xCF);
             SetFlag(FLAGS6502.U, true);
             return 0;
         }

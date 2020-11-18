@@ -57,6 +57,8 @@
 */
 using System;
 using System.Collections.Generic;
+using System.Diagnostics;
+using System.IO;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
@@ -72,13 +74,12 @@ namespace NESharp.Components
         public const ushort IRQ_PC_START_ADDRESS = 0xFFFE;
         public const ushort NMI_PC_START_ADDRESS = 0xFFFA;
 
-        public const byte INITIAL_STACK_POINTER = 0xFF;
+        public const byte INITIAL_STACK_POINTER = 0xFD;
         public const ushort STACK_ADDRESS_HIGH_BYTE_MASK = 0x0100;
 
         public const byte RESET_CYCLE_COUNT = 8;
         public const byte IRQ_CYCLE_COUNT = 7;
         public const byte NMI_CYCLE_COUNT = 8;
-
 
         #endregion
 
@@ -153,9 +154,13 @@ namespace NESharp.Components
         private byte opcode = 0x00;             // Is the instruction byte
         private byte cycles = 0;                // Counts how many cycles the instruction has remaining
         private uint clock_count = 0;           // A global accumulation of the number of clocks
-        private Instruction instruction;        // Current instruction descriptor for current opcode
 
         #endregion
+
+        public bool DebugEnabled { get; set; }
+        public ushort DebugBreakPc { get; set; }
+        public Action DebugPcHitCallback { get; set; }
+        private StreamWriter logger;
 
         /// <summary>
         /// Ctor
@@ -166,13 +171,13 @@ namespace NESharp.Components
             // index is the opcode value from 0 to 255
             Lookup = new List<Instruction>()
             {
-                new Instruction("BRK", BRK, IMM, 7 ), new Instruction("ORA", ORA, IZX, 6 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("???", XXX, IMP, 8 ), new Instruction("???", NOP, IMP, 3 ), new Instruction("ORA", ORA, ZP0, 3 ), new Instruction("ASL", ASL, ZP0, 5 ), new Instruction("???", XXX, IMP, 5 ), new Instruction("PHP", PHP, IMP, 3 ), new Instruction("ORA", ORA, IMM, 2 ), new Instruction("ASL", ASL, IMP, 2 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("???", NOP, IMP, 4 ), new Instruction("ORA", ORA, ABS, 4 ), new Instruction("ASL", ASL, ABS, 6 ), new Instruction("???", XXX, IMP, 6 ),
+                new Instruction("BRK", BRK, IMM, 7 ), new Instruction("ORA", ORA, IZX, 6 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("???", XXX, IMP, 8 ), new Instruction("ign", NOP, IMM, 3 ), new Instruction("ORA", ORA, ZP0, 3 ), new Instruction("ASL", ASL, ZP0, 5 ), new Instruction("???", XXX, IMP, 5 ), new Instruction("PHP", PHP, IMP, 3 ), new Instruction("ORA", ORA, IMM, 2 ), new Instruction("ASL", ASL, IMP, 2 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("???", NOP, IMP, 4 ), new Instruction("ORA", ORA, ABS, 4 ), new Instruction("ASL", ASL, ABS, 6 ), new Instruction("???", XXX, IMP, 6 ),
                 new Instruction("BPL", BPL, REL, 2 ), new Instruction("ORA", ORA, IZY, 5 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("???", XXX, IMP, 8 ), new Instruction("???", NOP, IMP, 4 ), new Instruction("ORA", ORA, ZPX, 4 ), new Instruction("ASL", ASL, ZPX, 6 ), new Instruction("???", XXX, IMP, 6 ), new Instruction("CLC", CLC, IMP, 2 ), new Instruction("ORA", ORA, ABY, 4 ), new Instruction("???", NOP, IMP, 2 ), new Instruction("???", XXX, IMP, 7 ), new Instruction("???", NOP, IMP, 4 ), new Instruction("ORA", ORA, ABX, 4 ), new Instruction("ASL", ASL, ABX, 7 ), new Instruction("???", XXX, IMP, 7 ),
                 new Instruction("JSR", JSR, ABS, 6 ), new Instruction("AND", AND, IZX, 6 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("???", XXX, IMP, 8 ), new Instruction("BIT", BIT, ZP0, 3 ), new Instruction("AND", AND, ZP0, 3 ), new Instruction("ROL", ROL, ZP0, 5 ), new Instruction("???", XXX, IMP, 5 ), new Instruction("PLP", PLP, IMP, 4 ), new Instruction("AND", AND, IMM, 2 ), new Instruction("ROL", ROL, IMP, 2 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("BIT", BIT, ABS, 4 ), new Instruction("AND", AND, ABS, 4 ), new Instruction("ROL", ROL, ABS, 6 ), new Instruction("???", XXX, IMP, 6 ),
                 new Instruction("BMI", BMI, REL, 2 ), new Instruction("AND", AND, IZY, 5 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("???", XXX, IMP, 8 ), new Instruction("???", NOP, IMP, 4 ), new Instruction("AND", AND, ZPX, 4 ), new Instruction("ROL", ROL, ZPX, 6 ), new Instruction("???", XXX, IMP, 6 ), new Instruction("SEC", SEC, IMP, 2 ), new Instruction("AND", AND, ABY, 4 ), new Instruction("???", NOP, IMP, 2 ), new Instruction("???", XXX, IMP, 7 ), new Instruction("???", NOP, IMP, 4 ), new Instruction("AND", AND, ABX, 4 ), new Instruction("ROL", ROL, ABX, 7 ), new Instruction("???", XXX, IMP, 7 ),
-                new Instruction("RTI", RTI, IMP, 6 ), new Instruction("EOR", EOR, IZX, 6 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("???", XXX, IMP, 8 ), new Instruction("???", NOP, IMP, 3 ), new Instruction("EOR", EOR, ZP0, 3 ), new Instruction("LSR", LSR, ZP0, 5 ), new Instruction("???", XXX, IMP, 5 ), new Instruction("PHA", PHA, IMP, 3 ), new Instruction("EOR", EOR, IMM, 2 ), new Instruction("LSR", LSR, IMP, 2 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("JMP", JMP, ABS, 3 ), new Instruction("EOR", EOR, ABS, 4 ), new Instruction("LSR", LSR, ABS, 6 ), new Instruction("???", XXX, IMP, 6 ),
+                new Instruction("RTI", RTI, IMP, 6 ), new Instruction("EOR", EOR, IZX, 6 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("???", XXX, IMP, 8 ), new Instruction("ign", NOP, IMM, 3 ), new Instruction("EOR", EOR, ZP0, 3 ), new Instruction("LSR", LSR, ZP0, 5 ), new Instruction("???", XXX, IMP, 5 ), new Instruction("PHA", PHA, IMP, 3 ), new Instruction("EOR", EOR, IMM, 2 ), new Instruction("LSR", LSR, IMP, 2 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("JMP", JMP, ABS, 3 ), new Instruction("EOR", EOR, ABS, 4 ), new Instruction("LSR", LSR, ABS, 6 ), new Instruction("???", XXX, IMP, 6 ),
                 new Instruction("BVC", BVC, REL, 2 ), new Instruction("EOR", EOR, IZY, 5 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("???", XXX, IMP, 8 ), new Instruction("???", NOP, IMP, 4 ), new Instruction("EOR", EOR, ZPX, 4 ), new Instruction("LSR", LSR, ZPX, 6 ), new Instruction("???", XXX, IMP, 6 ), new Instruction("CLI", CLI, IMP, 2 ), new Instruction("EOR", EOR, ABY, 4 ), new Instruction("???", NOP, IMP, 2 ), new Instruction("???", XXX, IMP, 7 ), new Instruction("???", NOP, IMP, 4 ), new Instruction("EOR", EOR, ABX, 4 ), new Instruction("LSR", LSR, ABX, 7 ), new Instruction("???", XXX, IMP, 7 ),
-                new Instruction("RTS", RTS, IMP, 6 ), new Instruction("ADC", ADC, IZX, 6 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("???", XXX, IMP, 8 ), new Instruction("???", NOP, IMP, 3 ), new Instruction("ADC", ADC, ZP0, 3 ), new Instruction("ROR", ROR, ZP0, 5 ), new Instruction("???", XXX, IMP, 5 ), new Instruction("PLA", PLA, IMP, 4 ), new Instruction("ADC", ADC, IMM, 2 ), new Instruction("ROR", ROR, IMP, 2 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("JMP", JMP, IND, 5 ), new Instruction("ADC", ADC, ABS, 4 ), new Instruction("ROR", ROR, ABS, 6 ), new Instruction("???", XXX, IMP, 6 ),
+                new Instruction("RTS", RTS, IMP, 6 ), new Instruction("ADC", ADC, IZX, 6 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("???", XXX, IMP, 8 ), new Instruction("ign", NOP, IMM, 3 ), new Instruction("ADC", ADC, ZP0, 3 ), new Instruction("ROR", ROR, ZP0, 5 ), new Instruction("???", XXX, IMP, 5 ), new Instruction("PLA", PLA, IMP, 4 ), new Instruction("ADC", ADC, IMM, 2 ), new Instruction("ROR", ROR, IMP, 2 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("JMP", JMP, IND, 5 ), new Instruction("ADC", ADC, ABS, 4 ), new Instruction("ROR", ROR, ABS, 6 ), new Instruction("???", XXX, IMP, 6 ),
                 new Instruction("BVS", BVS, REL, 2 ), new Instruction("ADC", ADC, IZY, 5 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("???", XXX, IMP, 8 ), new Instruction("???", NOP, IMP, 4 ), new Instruction("ADC", ADC, ZPX, 4 ), new Instruction("ROR", ROR, ZPX, 6 ), new Instruction("???", XXX, IMP, 6 ), new Instruction("SEI", SEI, IMP, 2 ), new Instruction("ADC", ADC, ABY, 4 ), new Instruction("???", NOP, IMP, 2 ), new Instruction("???", XXX, IMP, 7 ), new Instruction("???", NOP, IMP, 4 ), new Instruction("ADC", ADC, ABX, 4 ), new Instruction("ROR", ROR, ABX, 7 ), new Instruction("???", XXX, IMP, 7 ),
                 new Instruction("???", NOP, IMP, 2 ), new Instruction("STA", STA, IZX, 6 ), new Instruction("???", NOP, IMP, 2 ), new Instruction("???", XXX, IMP, 6 ), new Instruction("STY", STY, ZP0, 3 ), new Instruction("STA", STA, ZP0, 3 ), new Instruction("STX", STX, ZP0, 3 ), new Instruction("???", XXX, IMP, 3 ), new Instruction("DEY", DEY, IMP, 2 ), new Instruction("???", NOP, IMP, 2 ), new Instruction("TXA", TXA, IMP, 2 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("STY", STY, ABS, 4 ), new Instruction("STA", STA, ABS, 4 ), new Instruction("STX", STX, ABS, 4 ), new Instruction("???", XXX, IMP, 4 ),
                 new Instruction("BCC", BCC, REL, 2 ), new Instruction("STA", STA, IZY, 6 ), new Instruction("???", XXX, IMP, 2 ), new Instruction("???", XXX, IMP, 6 ), new Instruction("STY", STY, ZPX, 4 ), new Instruction("STA", STA, ZPX, 4 ), new Instruction("STX", STX, ZPY, 4 ), new Instruction("???", XXX, IMP, 4 ), new Instruction("TYA", TYA, IMP, 2 ), new Instruction("STA", STA, ABY, 5 ), new Instruction("TXS", TXS, IMP, 2 ), new Instruction("???", XXX, IMP, 5 ), new Instruction("???", NOP, IMP, 5 ), new Instruction("STA", STA, ABX, 5 ), new Instruction("???", XXX, IMP, 5 ), new Instruction("???", XXX, IMP, 5 ),
@@ -218,6 +223,7 @@ namespace NESharp.Components
 
             // Reset takes time
             cycles = RESET_CYCLE_COUNT;
+            clock_count = 0;
         }
 
         /// <summary>
@@ -289,10 +295,30 @@ namespace NESharp.Components
             // The result is calculated immediatly based on an opperation cycle value
             if (cycles == 0)
             {
+                if (DebugEnabled)
+                {
+                    // Init logger
+                    logger = logger ??= File.CreateText("cpu.txt");
+                    // Log Pc before incrementing
+                    logger.WriteLine($"{Pc:X4}  A:{A:X2} X:{X:X2} Y:{Y:X2} P:{(byte)Status:X2} SP:{StkPtr:X2}  CYC:{clock_count}");
+
+                    // Usefull to break at a specific prg location
+                    if (DebugBreakPc != 0x0000 && Pc == DebugBreakPc)
+                    {
+                        Debugger.Break();
+                        // Disable further breaks
+                        DebugBreakPc = 0;
+                        // force push logging buffer to file
+                        logger.Flush();
+                        // Notify if defined
+                        DebugPcHitCallback?.Invoke();
+                    }
+                }
+
                 // Read next instruction byte. This 8-bit value is used to index
                 // the translation table to get the relevant information about
                 // how to implement the instruction
-                opcode = CpuRead(Pc);
+                opcode = CpuRead(Pc, false);
 
                 // Always set the unused status flag bit to 1
                 Status |= FLAGS6502.U;
@@ -311,11 +337,11 @@ namespace NESharp.Components
 
                 // The addressmode and opcode may have altered the number
                 // of cycles this instruction requires before its completed
-                // TODODA: was originally a & operand why ?
-                cycles += (byte)(extra_cycles1 + extra_cycles2);
+                cycles += (byte)(extra_cycles1 & extra_cycles2);
 
                 // Always set the unused status flag bit to 1
                 Status |= FLAGS6502.U;
+
             }
 
             // Increment global clock count - This is actually unused unless logging is enabled
@@ -353,7 +379,7 @@ namespace NESharp.Components
         private byte PopStack()
         {
             StkPtr++;
-            return CpuRead((ushort)(STACK_ADDRESS_HIGH_BYTE_MASK + StkPtr));
+            return CpuRead((ushort)(STACK_ADDRESS_HIGH_BYTE_MASK + StkPtr), false);
         }
 
         private void PopStackToPc()
@@ -367,8 +393,8 @@ namespace NESharp.Components
         private ushort ReadAsAddress(ushort startAddress)
         {
             addr_abs = startAddress;
-            ushort low = CpuRead((ushort)(addr_abs + 0));
-            ushort high = CpuRead((ushort)(addr_abs + 1));
+            ushort low = CpuRead((ushort)(addr_abs + 0), false);
+            ushort high = CpuRead((ushort)(addr_abs + 1), false);
 
             // return the result as an address
             return (ushort)((high << 8) | low);
@@ -380,7 +406,8 @@ namespace NESharp.Components
         /// <returns></returns>
         private byte ReadPc()
         {
-            return CpuRead(Pc++);
+            return CpuRead(Pc++, false);
+
         }
 
         /// <summary>
@@ -426,9 +453,9 @@ namespace NESharp.Components
         /// </summary>
         /// <param name="address"></param>
         /// <returns></returns>
-        public byte CpuRead(ushort address)
+        public byte CpuRead(ushort address, bool asReadOnly)
         {
-            return Bus.CpuRead(address);
+            return Bus.CpuRead(address, asReadOnly);
         }
 
         /// <summary>

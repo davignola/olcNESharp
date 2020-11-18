@@ -12,5 +12,6 @@ namespace NESharp.Mapper
         bool CpuMapWrite(ushort address, ref uint mapped_address);
         bool PpuMapRead(ushort address, ref uint mapped_address);
         bool PpuMapWrite(ushort address, ref uint mapped_address);
+        void Reset();
     }
 }

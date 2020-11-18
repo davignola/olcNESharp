@@ -24,5 +24,6 @@ namespace NESharp.Mapper
         public abstract bool PpuMapRead(ushort address, ref uint mapped_address);
 
         public abstract bool PpuMapWrite(ushort address, ref uint mapped_address);
+        public abstract void Reset();
     }
 }

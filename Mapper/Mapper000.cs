@@ -127,5 +127,10 @@ namespace NESharp.Mapper
 
             return false;
         }
+
+        public override void Reset()
+        {
+            
+        }
     }
 }

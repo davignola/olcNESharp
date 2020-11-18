@@ -1,0 +1,1182 @@
+﻿/*
+	olc::NES 
+	"Thanks Dad for believing computers were gonna be a big deal..." - javidx9
+
+	License (OLC-3)
+	~~~~~~~~~~~~~~~
+
+	Copyright 2018-2019 OneLoneCoder.com
+
+	Redistribution and use in source and binary forms, with or without
+	modification, are permitted provided that the following conditions
+	are met:
+
+	1. Redistributions or derivations of source code must retain the above
+	copyright notice, this list of conditions and the following disclaimer.
+
+	2. Redistributions or derivative works in binary form must reproduce
+	the above copyright notice. This list of conditions and the following
+	disclaimer must be reproduced in the documentation and/or other
+	materials provided with the distribution.
+
+	3. Neither the name of the copyright holder nor the names of its
+	contributors may be used to endorse or promote products derived
+	from this software without specific prior written permission.
+
+	THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+	"AS IS" AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+	LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+	A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT
+	HOLDER OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL,
+	SPECIAL, EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT
+	LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE,
+	DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY
+	THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
+	(INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+	OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+
+
+	Relevant Video: https://youtu.be/xdzOvpYPmGE
+
+	Links
+	~~~~~
+	YouTube:	https://www.youtube.com/javidx9
+				https://www.youtube.com/javidx9extra
+	Discord:	https://discord.gg/WhwHUMV
+	Twitter:	https://www.twitter.com/javidx9
+	Twitch:		https://www.twitch.tv/javidx9
+	GitHub:		https://www.github.com/onelonecoder
+	Patreon:	https://www.patreon.com/javidx9
+	Homepage:	https://www.onelonecoder.com
+
+	Author
+	~~~~~~
+	David Barr, aka javidx9, ©OneLoneCoder 2019
+
+    Adapted to C# by davignola :  https://github.com/davignola
+*/
+using System;
+using System.Collections.Generic;
+using System.Collections.Specialized;
+using System.Linq;
+using System.Runtime.CompilerServices;
+using System.Text;
+using System.Threading.Tasks;
+using olc.wrapper;
+
+namespace NESharp.Components
+{
+    public sealed class Ppu2C02 : IConnectableDevice
+    {
+
+        #region Status "Structs"
+
+        // bit fields are not a thing in C# :(
+        // Using BitVectors to emulate this behavior
+
+        private BitVector32 status = new BitVector32(0);
+        private BitVector32 mask = new BitVector32(0);
+        private BitVector32 control = new BitVector32(0);
+        private BitVector32 vram_addr = new BitVector32(0);
+        private BitVector32 tram_addr = new BitVector32(0);
+
+        // Helper section
+        // BitVector internal data is realonly and can't creale a mask for the whole 32bit
+        // No data structure are greater than 16 bit anyway so this is enough
+        private BitVector32.Section allFirst16 = BitVector32.CreateSection(short.MaxValue);
+
+        // Status sections
+        private BitVector32.Section statusUnused;
+        private BitVector32.Section statusSpriteOverflow;
+        private BitVector32.Section statusSpriteZeroHit;
+        private BitVector32.Section statusVerticalBlank;
+
+        // Mask... masks
+        private int maskGrayscale;
+        private int maskRenderBackgroundLeft;
+        private int maskRenderSpritesLeft;
+        private int maskRenderBackground;
+        private int maskRenderSprites;
+        private int maskEnhanceRed;
+        private int maskEnhanceGreen;
+        private int maskEnhanceBlue;
+
+        // Control masks
+        private int controlNametableX;
+        private int controlNametableY;
+        private int controlIncrementMode;
+        private int controlPatternSprite;
+        private int controlPatternBackground;
+        private int controlSpriteSize;
+        private int controlSlaveMode; // unused
+        private int controlEnableNmi;
+
+        // Loopy register sections
+        // Credit to Loopy for working this out :D
+        private BitVector32.Section loopyCoarseX;
+        private BitVector32.Section loopyCoarseY;
+        private BitVector32.Section loopyNametableX;
+        private BitVector32.Section loopyNametableY;
+        private BitVector32.Section loopyFineY;
+        private BitVector32.Section loopyUnused;
+
+        #endregion
+
+        private byte[][] tblName = new byte[2][];
+        private byte[][] tblPattern = new byte[2][];
+        private byte[] tblPalette = new byte[32];
+
+        private PixelManaged[] palScreen = new PixelManaged[0x40];
+        private SpriteManaged sprScreen = new SpriteManaged(256, 240);
+        private SpriteManaged[] sprNameTable = { new SpriteManaged(256, 240), new SpriteManaged(256, 240) };
+        private SpriteManaged[] sprPatternTable = { new SpriteManaged(128, 128), new SpriteManaged(128, 128) };
+
+        private Cartridge cartridge;
+
+        Random rand = new Random();
+
+        // Pixel offset horizontally
+        byte fine_x = 0x00;
+
+        // Internal communications
+        byte address_latch = 0x00;
+        byte ppu_data_buffer = 0x00;
+
+        // Pixel "dot" position information
+        private short scanline = 0;
+        private short cycle = 0;
+
+        // Background rendering
+        byte bg_next_tile_id = 0x00;
+        byte bg_next_tile_attrib = 0x00;
+        byte bg_next_tile_lsb = 0x00;
+        byte bg_next_tile_msb = 0x00;
+        ushort bg_shifter_pattern_lo = 0x0000;
+        ushort bg_shifter_pattern_hi = 0x0000;
+        ushort bg_shifter_attrib_lo = 0x0000;
+        ushort bg_shifter_attrib_hi = 0x0000;
+
+        public IIODevice Bus { get; private set; }
+        public bool HasCompletedFrame { get; set; } = false;
+        public bool Nmi { get; set; }
+
+        public Ppu2C02()
+        {
+            // Init ram
+            tblName[0] = new byte[1024];
+            tblName[1] = new byte[1024];
+            tblPattern[0] = new byte[4096];
+            tblPattern[1] = new byte[4096];
+
+
+            // NES supported colors 
+            palScreen[0x00] = new PixelManaged(84, 84, 84);
+            palScreen[0x01] = new PixelManaged(0, 30, 116);
+            palScreen[0x02] = new PixelManaged(8, 16, 144);
+            palScreen[0x03] = new PixelManaged(48, 0, 136);
+            palScreen[0x04] = new PixelManaged(68, 0, 100);
+            palScreen[0x05] = new PixelManaged(92, 0, 48);
+            palScreen[0x06] = new PixelManaged(84, 4, 0);
+            palScreen[0x07] = new PixelManaged(60, 24, 0);
+            palScreen[0x08] = new PixelManaged(32, 42, 0);
+            palScreen[0x09] = new PixelManaged(8, 58, 0);
+            palScreen[0x0A] = new PixelManaged(0, 64, 0);
+            palScreen[0x0B] = new PixelManaged(0, 60, 0);
+            palScreen[0x0C] = new PixelManaged(0, 50, 60);
+            palScreen[0x0D] = new PixelManaged(0, 0, 0);
+            palScreen[0x0E] = new PixelManaged(0, 0, 0);
+            palScreen[0x0F] = new PixelManaged(0, 0, 0);
+
+            palScreen[0x10] = new PixelManaged(152, 150, 152);
+            palScreen[0x11] = new PixelManaged(8, 76, 196);
+            palScreen[0x12] = new PixelManaged(48, 50, 236);
+            palScreen[0x13] = new PixelManaged(92, 30, 228);
+            palScreen[0x14] = new PixelManaged(136, 20, 176);
+            palScreen[0x15] = new PixelManaged(160, 20, 100);
+            palScreen[0x16] = new PixelManaged(152, 34, 32);
+            palScreen[0x17] = new PixelManaged(120, 60, 0);
+            palScreen[0x18] = new PixelManaged(84, 90, 0);
+            palScreen[0x19] = new PixelManaged(40, 114, 0);
+            palScreen[0x1A] = new PixelManaged(8, 124, 0);
+            palScreen[0x1B] = new PixelManaged(0, 118, 40);
+            palScreen[0x1C] = new PixelManaged(0, 102, 120);
+            palScreen[0x1D] = new PixelManaged(0, 0, 0);
+            palScreen[0x1E] = new PixelManaged(0, 0, 0);
+            palScreen[0x1F] = new PixelManaged(0, 0, 0);
+
+            palScreen[0x20] = new PixelManaged(236, 238, 236);
+            palScreen[0x21] = new PixelManaged(76, 154, 236);
+            palScreen[0x22] = new PixelManaged(120, 124, 236);
+            palScreen[0x23] = new PixelManaged(176, 98, 236);
+            palScreen[0x24] = new PixelManaged(228, 84, 236);
+            palScreen[0x25] = new PixelManaged(236, 88, 180);
+            palScreen[0x26] = new PixelManaged(236, 106, 100);
+            palScreen[0x27] = new PixelManaged(212, 136, 32);
+            palScreen[0x28] = new PixelManaged(160, 170, 0);
+            palScreen[0x29] = new PixelManaged(116, 196, 0);
+            palScreen[0x2A] = new PixelManaged(76, 208, 32);
+            palScreen[0x2B] = new PixelManaged(56, 204, 108);
+            palScreen[0x2C] = new PixelManaged(56, 180, 204);
+            palScreen[0x2D] = new PixelManaged(60, 60, 60);
+            palScreen[0x2E] = new PixelManaged(0, 0, 0);
+            palScreen[0x2F] = new PixelManaged(0, 0, 0);
+
+            palScreen[0x30] = new PixelManaged(236, 238, 236);
+            palScreen[0x31] = new PixelManaged(168, 204, 236);
+            palScreen[0x32] = new PixelManaged(188, 188, 236);
+            palScreen[0x33] = new PixelManaged(212, 178, 236);
+            palScreen[0x34] = new PixelManaged(236, 174, 236);
+            palScreen[0x35] = new PixelManaged(236, 174, 212);
+            palScreen[0x36] = new PixelManaged(236, 180, 176);
+            palScreen[0x37] = new PixelManaged(228, 196, 144);
+            palScreen[0x38] = new PixelManaged(204, 210, 120);
+            palScreen[0x39] = new PixelManaged(180, 222, 120);
+            palScreen[0x3A] = new PixelManaged(168, 226, 144);
+            palScreen[0x3B] = new PixelManaged(152, 226, 180);
+            palScreen[0x3C] = new PixelManaged(160, 214, 228);
+            palScreen[0x3D] = new PixelManaged(160, 162, 160);
+            palScreen[0x3E] = new PixelManaged(0, 0, 0);
+            palScreen[0x3F] = new PixelManaged(0, 0, 0);
+
+
+            // Init sections definitions
+            statusUnused = BitVector32.CreateSection(31);
+            statusSpriteOverflow = BitVector32.CreateSection(1, statusUnused);
+            statusSpriteZeroHit = BitVector32.CreateSection(1, statusSpriteOverflow);
+            statusVerticalBlank = BitVector32.CreateSection(1, statusSpriteZeroHit);
+
+            maskGrayscale = BitVector32.CreateMask();
+            maskRenderBackgroundLeft = BitVector32.CreateMask(maskGrayscale);
+            maskRenderSpritesLeft = BitVector32.CreateMask(maskRenderBackgroundLeft);
+            maskRenderBackground = BitVector32.CreateMask(maskRenderSpritesLeft);
+            maskRenderSprites = BitVector32.CreateMask(maskRenderBackground);
+            maskEnhanceRed = BitVector32.CreateMask(maskRenderSprites);
+            maskEnhanceGreen = BitVector32.CreateMask(maskEnhanceRed);
+            maskEnhanceBlue = BitVector32.CreateMask(maskEnhanceGreen);
+
+            controlNametableX = BitVector32.CreateMask();
+            controlNametableY = BitVector32.CreateMask(controlNametableX);
+            controlIncrementMode = BitVector32.CreateMask(controlNametableY);
+            controlPatternSprite = BitVector32.CreateMask(controlIncrementMode);
+            controlPatternBackground = BitVector32.CreateMask(controlPatternSprite);
+            controlSpriteSize = BitVector32.CreateMask(controlPatternBackground);
+            controlSlaveMode = BitVector32.CreateMask(controlSpriteSize); // unused
+            controlEnableNmi = BitVector32.CreateMask(controlSlaveMode);
+
+            loopyCoarseX = BitVector32.CreateSection(5);
+            loopyCoarseY = BitVector32.CreateSection(5);
+            loopyNametableX = BitVector32.CreateSection(1);
+            loopyNametableY = BitVector32.CreateSection(1);
+            loopyFineY = BitVector32.CreateSection(3);
+            loopyUnused = BitVector32.CreateSection(1);
+        }
+
+        public void ConnectBus(IIODevice bus)
+        {
+            this.Bus = bus;
+        }
+
+
+        public SpriteManaged GetScreen()
+        {
+            // Simply returns the current sprite holding the rendered screen
+            return sprScreen;
+        }
+
+        public SpriteManaged GetNameTable(byte i)
+        {
+            // As of now unused, but a placeholder for nametable visualisation in the future
+            return sprNameTable[i];
+        }
+
+        /// <summary>
+        /// This function draw the CHR ROM for a given pattern table into
+        /// an olc::Sprite, using a specified palette. Pattern tables consist
+        /// of 16x16 "tiles or characters". It is independent of the running
+        /// emulation and using it does not change the systems state, though
+        /// it gets all the data it needs from the live system. Consequently,
+        /// if the game has not yet established palettes or mapped to relevant
+        /// CHR ROM banks, the sprite may look empty. This approach permits a 
+        /// "live" extraction of the pattern table exactly how the NES, and 
+        /// ultimately the player would see it.
+
+        /// A tile consists of 8x8 pixels. On the NES, pixels are 2 bits, which
+        /// gives an index into 4 different colours of a specific palette. There
+        /// are 8 palettes to choose from. Colour "0" in each palette is effectively
+        /// considered transparent, as those locations in memory "mirror" the global
+        /// background colour being used. This mechanics of this are shown in 
+        /// detail in ppuRead() & ppuWrite()
+
+        /// Characters on NES
+        /// ~~~~~~~~~~~~~~~~~
+        /// The NES stores characters using 2-bit pixels. These are not stored sequentially
+        /// but in singular bit planes. For example:
+        ///
+        /// 2-Bit Pixels       LSB Bit Plane     MSB Bit Plane
+        /// 0 0 0 0 0 0 0 0	  0 0 0 0 0 0 0 0   0 0 0 0 0 0 0 0
+        /// 0 1 1 0 0 1 1 0	  0 1 1 0 0 1 1 0   0 0 0 0 0 0 0 0
+        /// 0 1 2 0 0 2 1 0	  0 1 1 0 0 1 1 0   0 0 1 0 0 1 0 0
+        /// 0 0 0 0 0 0 0 0 =  0 0 0 0 0 0 0 0 + 0 0 0 0 0 0 0 0
+        /// 0 1 1 0 0 1 1 0	  0 1 1 0 0 1 1 0   0 0 0 0 0 0 0 0
+        /// 0 0 1 1 1 1 0 0	  0 0 1 1 1 1 0 0   0 0 0 0 0 0 0 0
+        /// 0 0 0 2 2 0 0 0	  0 0 0 1 1 0 0 0   0 0 0 1 1 0 0 0
+        /// 0 0 0 0 0 0 0 0	  0 0 0 0 0 0 0 0   0 0 0 0 0 0 0 0
+        ///
+        /// The planes are stored as 8 bytes of LSB, followed by 8 bytes of MSB
+        /// </summary>
+        /// <returns></returns>
+        public SpriteManaged GetPatternTable(byte i, byte palette)
+        {
+            // Loop through all 16x16 tiles
+            for (ushort nTileY = 0; nTileY < 16; nTileY++)
+            {
+                for (ushort nTileX = 0; nTileX < 16; nTileX++)
+                {
+                    // Convert the 2D tile coordinate into a 1D offset into the pattern
+                    // table memory.
+                    ushort nOffset = (ushort)(nTileY * 256 + nTileX * 16);
+
+
+                    // Now loop through 8 rows of 8 pixels
+                    for (ushort row = 0; row < 8; row++)
+                    {
+                        // For each row, we need to read both bit planes of the character
+                        // in order to extract the least significant and most significant 
+                        // bits of the 2 bit pixel value. in the CHR ROM, each character
+                        // is stored as 64 bits of lsb, followed by 64 bits of msb. This
+                        // conveniently means that two corresponding rows are always 8
+                        // bytes apart in memory.
+                        byte tile_lsb = PpuRead((ushort)(i * 0x1000 + nOffset + row + 0x0000));
+                        byte tile_msb = PpuRead((ushort)(i * 0x1000 + nOffset + row + 0x0008));
+
+                        // Now we have a single row of the two bit planes for the character
+                        // we need to iterate through the 8-bit words, combining them to give
+                        // us the final pixel index
+                        for (ushort col = 0; col < 8; col++)
+                        {
+                            // We can get the index value by simply adding the bits together
+                            // but we're only interested in the lsb of the row words because...
+                            byte pixel = (byte)((tile_lsb & 0x01) + (tile_msb & 0x01));
+
+                            // ...we will shift the row words 1 bit right for each column of
+                            // the character.
+                            tile_lsb >>= 1;
+                            tile_msb >>= 1;
+
+                            // Now we know the location and NES pixel value for a specific location
+                            // in the pattern table, we can translate that to a screen colour, and an
+                            // (x,y) location in the sprite
+                            sprPatternTable[i].SetPixel
+                            (
+                                nTileX * 8 + (7 - col), // Because we are using the lsb of the row word first
+                                                        // we are effectively reading the row from right
+                                                        // to left, so we need to draw the row "backwards"
+                                nTileY * 8 + row,
+                                GetColourFromPaletteRam(palette, pixel)
+                            );
+                        }
+                    }
+                }
+            }
+
+            // Finally return the updated sprite representing the pattern table
+            return sprPatternTable[i];
+        }
+
+        /// <summary>
+        /// This is a convenience function that takes a specified palette and pixel
+        /// index and returns the appropriate screen colour.
+        /// "0x3F00"       - Offset into PPU addressable range where palettes are stored
+        /// "palette << 2" - Each palette is 4 bytes in size
+        /// "pixel"        - Each pixel index is either 0, 1, 2 or 3
+        /// "& 0x3F"       - Stops us reading beyond the bounds of the palScreen array
+        /// </summary>
+        /// <param name="palette"></param>
+        /// <param name="pixel"></param>
+        /// <returns></returns>
+        public PixelManaged GetColourFromPaletteRam(byte palette, byte pixel)
+        {
+
+            return palScreen[PpuRead((ushort)(0x3F00 + (palette << 2) + pixel)) & 0x3F];
+
+            // Note: We dont access tblPalette directly here, instead we know that ppuRead()
+            // will map the address onto the seperate small RAM attached to the PPU bus.
+        }
+
+        public byte CpuRead(ushort address, bool asReadonly)
+        {
+            byte data = 0x00;
+
+            if (asReadonly)
+            {
+                // Reading from PPU registers can affect their contents
+                // so this read only option is used for examining the
+                // state of the PPU without changing its state. This is
+                // really only used in debug mode.
+                switch (address)
+                {
+                    case 0x0000: // Control
+                        data = (byte)control.Data;
+                        break;
+                    case 0x0001: // Mask
+                        data = (byte)mask.Data;
+                        break;
+                    case 0x0002: // Status
+                        data = (byte)status.Data;
+                        break;
+                    case 0x0003: // OAM Address
+                        break;
+                    case 0x0004: // OAM Data
+                        break;
+                    case 0x0005: // Scroll
+                        break;
+                    case 0x0006: // PPU Address
+                        break;
+                    case 0x0007: // PPU Data
+                        break;
+                }
+            }
+            else
+            {
+                // These are the live PPU registers that repsond
+                // to being read from in various ways. Note that not
+                // all the registers are capable of being read from
+                // so they just return 0x00
+                switch (address)
+                {
+                    // Control - Not readable
+                    case 0x0000: break;
+
+                    // Mask - Not Readable
+                    case 0x0001: break;
+
+                    // Status
+                    case 0x0002:
+                        // Reading from the status register has the effect of resetting
+                        // different parts of the circuit. Only the top three bits
+                        // contain status information, however it is possible that
+                        // some "noise" gets picked up on the bottom 5 bits which 
+                        // represent the last PPU bus transaction. Some games "may"
+                        // use this noise as valid data (even though they probably
+                        // shouldn't)
+                        data = (byte)((status.Data & 0xE0) | (ppu_data_buffer & 0x1F));
+
+                        // Clear the vertical blanking flag
+                        status[statusVerticalBlank] = 0;
+
+                        // Reset Loopy's Address latch flag
+                        address_latch = 0;
+                        break;
+
+                    // OAM Address
+                    case 0x0003: break;
+
+                    // OAM Data
+                    case 0x0004: break;
+
+                    // Scroll - Not Readable
+                    case 0x0005: break;
+
+                    // PPU Address - Not Readable
+                    case 0x0006: break;
+
+                    // PPU Data
+                    case 0x0007:
+                        // Reads from the NameTable ram get delayed one cycle, 
+                        // so output buffer which contains the data from the 
+                        // previous read request
+                        data = ppu_data_buffer;
+                        // then update the buffer for next time
+                        ppu_data_buffer = PpuRead((ushort)vram_addr.Data);
+                        // However, if the address was in the palette range, the
+                        // data is not delayed, so it returns immediately
+                        if (vram_addr.Data >= 0x3F00) data = ppu_data_buffer;
+                        // All reads from PPU data automatically increment the nametable
+                        // address depending upon the mode set in the control register.
+                        // If set to vertical mode, the increment is 32, so it skips
+                        // one whole nametable row; in horizontal mode it just increments
+                        // by 1, moving to the next column
+                        vram_addr[allFirst16] += control[controlIncrementMode] ? 32 : 1;
+                        break;
+                }
+            }
+
+            return data;
+        }
+
+        public void CpuWrite(ushort address, byte data)
+        {
+            switch (address)
+            {
+                case 0x0000: // Control
+                    control[allFirst16] = data;
+                    tram_addr[loopyNametableX] = control[controlNametableX] ? 1 : 0;
+                    tram_addr[loopyNametableY] = control[controlNametableY] ? 1 : 0;
+                    break;
+                case 0x0001: // Mask
+                    mask[allFirst16] = data;
+                    break;
+                case 0x0002: // Status
+                    break;
+                case 0x0003: // OAM Address
+                    break;
+                case 0x0004: // OAM Data
+                    break;
+                case 0x0005: // Scroll
+                    if (address_latch == 0)
+                    {
+                        // First write to scroll register contains X offset in pixel space
+                        // which we split into coarse and fine x values
+                        fine_x = (byte)(data & 0x07);
+                        tram_addr[loopyCoarseX] = data >> 3;
+                        address_latch = 1;
+                    }
+                    else
+                    {
+                        // First write to scroll register contains Y offset in pixel space
+                        // which we split into coarse and fine Y values
+                        tram_addr[loopyFineY] = data & 0x07;
+                        tram_addr[loopyCoarseY] = data >> 3;
+                        address_latch = 0;
+                    }
+
+                    break;
+                case 0x0006: // PPU Address
+                    if (address_latch == 0)
+                    {
+                        // PPU address bus can be accessed by CPU via the address and DATA
+                        // registers. The fisrt write to this register latches the high byte
+                        // of the address, the second is the low byte. Note the writes
+                        // are stored in the tram register...
+                        tram_addr[allFirst16] = (ushort)((data & 0x3F) << 8) | (tram_addr.Data & 0x00FF);
+                        address_latch = 1;
+                    }
+                    else
+                    {
+                        // ...when a whole address has been written, the internal vram address
+                        // buffer is updated. Writing to the PPU is unwise during rendering
+                        // as the PPU will maintam the vram address automatically whilst
+                        // rendering the scanline position.
+                        tram_addr[allFirst16] = (tram_addr.Data & 0xFF00) | data;
+                        vram_addr = tram_addr;
+                        address_latch = 0;
+                    }
+
+                    break;
+                case 0x0007: // PPU Data
+                    PpuWrite((ushort)vram_addr.Data, data);
+                    // All writes from PPU data automatically increment the nametable
+                    // address depending upon the mode set in the control register.
+                    // If set to vertical mode, the increment is 32, so it skips
+                    // one whole nametable row; in horizontal mode it just increments
+                    // by 1, moving to the next column
+                    vram_addr[allFirst16] += control[controlIncrementMode] ? 32 : 1;
+                    break;
+            }
+        }
+
+        public byte PpuRead(ushort address)
+        {
+            byte data = 0x00;
+            address &= 0x3FFF;
+
+            if (cartridge.PpuRead(address, ref data))
+            {
+
+            }
+            else if (address >= 0x0000 && address <= 0x1FFF)
+            {
+                // If the cartridge cant map the address, have
+                // a physical location ready here
+                data = tblPattern[(address & 0x1000) >> 12][address & 0x0FFF];
+            }
+            else if (address >= 0x2000 && address <= 0x3EFF)
+            {
+                address &= 0x0FFF;
+
+                if (cartridge.Mirror == Cartridge.MIRROR.VERTICAL)
+                {
+                    // Vertical
+                    if (address >= 0x0000 && address <= 0x03FF)
+                        data = tblName[0][address & 0x03FF];
+                    if (address >= 0x0400 && address <= 0x07FF)
+                        data = tblName[1][address & 0x03FF];
+                    if (address >= 0x0800 && address <= 0x0BFF)
+                        data = tblName[0][address & 0x03FF];
+                    if (address >= 0x0C00 && address <= 0x0FFF)
+                        data = tblName[1][address & 0x03FF];
+                }
+                else if (cartridge.Mirror == Cartridge.MIRROR.HORIZONTAL)
+                {
+                    // Horizontal
+                    if (address >= 0x0000 && address <= 0x03FF)
+                        data = tblName[0][address & 0x03FF];
+                    if (address >= 0x0400 && address <= 0x07FF)
+                        data = tblName[0][address & 0x03FF];
+                    if (address >= 0x0800 && address <= 0x0BFF)
+                        data = tblName[1][address & 0x03FF];
+                    if (address >= 0x0C00 && address <= 0x0FFF)
+                        data = tblName[1][address & 0x03FF];
+                }
+            }
+            else if (address >= 0x3F00 && address <= 0x3FFF)
+            {
+                address &= 0x001F;
+                if (address == 0x0010) address = 0x0000;
+                if (address == 0x0014) address = 0x0004;
+                if (address == 0x0018) address = 0x0008;
+                if (address == 0x001C) address = 0x000C;
+                data = (byte)(tblPalette[address] & (mask[maskGrayscale] ? 0x30 : 0x3F));
+            }
+
+            return data;
+        }
+
+        public void PpuWrite(ushort address, byte data)
+        {
+            address &= 0x3FFF;
+
+            if (cartridge.PpuWrite(address, data))
+            {
+
+            }
+            else if (address >= 0x0000 && address <= 0x1FFF)
+            {
+                tblPattern[(address & 0x1000) >> 12][address & 0x0FFF] = data;
+            }
+            else if (address >= 0x2000 && address <= 0x3EFF)
+            {
+                address &= 0x0FFF;
+                if (cartridge.Mirror == Cartridge.MIRROR.VERTICAL)
+                {
+                    // Vertical
+                    if (address >= 0x0000 && address <= 0x03FF)
+                        tblName[0][address & 0x03FF] = data;
+                    if (address >= 0x0400 && address <= 0x07FF)
+                        tblName[1][address & 0x03FF] = data;
+                    if (address >= 0x0800 && address <= 0x0BFF)
+                        tblName[0][address & 0x03FF] = data;
+                    if (address >= 0x0C00 && address <= 0x0FFF)
+                        tblName[1][address & 0x03FF] = data;
+                }
+                else if (cartridge.Mirror == Cartridge.MIRROR.HORIZONTAL)
+                {
+                    // Horizontal
+                    if (address >= 0x0000 && address <= 0x03FF)
+                        tblName[0][address & 0x03FF] = data;
+                    if (address >= 0x0400 && address <= 0x07FF)
+                        tblName[0][address & 0x03FF] = data;
+                    if (address >= 0x0800 && address <= 0x0BFF)
+                        tblName[1][address & 0x03FF] = data;
+                    if (address >= 0x0C00 && address <= 0x0FFF)
+                        tblName[1][address & 0x03FF] = data;
+                }
+            }
+            else if (address >= 0x3F00 && address <= 0x3FFF)
+            {
+                address &= 0x001F;
+                if (address == 0x0010) address = 0x0000;
+                if (address == 0x0014) address = 0x0004;
+                if (address == 0x0018) address = 0x0008;
+                if (address == 0x001C) address = 0x000C;
+                tblPalette[address] = data;
+            }
+        }
+
+        public void ConnectCartridge(Cartridge cartridge)
+        {
+            this.cartridge = cartridge;
+        }
+
+        public void Reset()
+        {
+            fine_x = 0x00;
+            address_latch = 0x00;
+            ppu_data_buffer = 0x00;
+            scanline = 0;
+            cycle = 0;
+            bg_next_tile_id = 0x00;
+            bg_next_tile_attrib = 0x00;
+            bg_next_tile_lsb = 0x00;
+            bg_next_tile_msb = 0x00;
+            bg_shifter_pattern_lo = 0x0000;
+            bg_shifter_pattern_hi = 0x0000;
+            bg_shifter_attrib_lo = 0x0000;
+            bg_shifter_attrib_hi = 0x0000;
+            status[allFirst16] = 0x00;
+            mask[allFirst16] = 0x00;
+            control[allFirst16] = 0x00;
+            vram_addr[allFirst16] = 0x0000;
+            tram_addr[allFirst16] = 0x0000;
+        }
+
+        /// <summary>
+        /// Perform one clock cycles worth of emulation
+        /// </summary>
+        public void Clock()
+        {
+            // As we progress through scanlines and cycles, the PPU is effectively
+            // a state machine going through the motions of fetching background 
+            // information and sprite information, compositing them into a pixel
+            // to be output.
+
+            // The lambda functions (functions inside functions) contain the various
+            // actions to be performed depending upon the output of the state machine
+            // for a given scanline/cycle combination
+
+            // ==============================================================================
+            // Increment the background tile "pointer" one tile/column horizontally
+            void IncrementScrollX()
+            {
+                // Note: pixel perfect scrolling horizontally is handled by the 
+                // data shifters. Here we are operating in the spatial domain of 
+                // tiles, 8x8 pixel blocks.
+
+                // Ony if rendering is enabled
+                if (mask[maskRenderBackground] || mask[maskRenderSprites])
+                {
+                    // A single name table is 32x30 tiles. As we increment horizontally
+                    // we may cross into a neighbouring nametable, or wrap around to
+                    // a neighbouring nametable
+                    if (vram_addr[loopyCoarseX] == 31)
+                    {
+                        // Leaving nametable so wrap address round
+                        vram_addr[loopyCoarseX] = 0;
+                        // Flip target nametable bit
+                        vram_addr[loopyNametableX] = ~vram_addr[loopyNametableX];
+                    }
+                    else
+                    {
+                        // Staying in current nametable, so just increment
+                        vram_addr[loopyCoarseX]++;
+                    }
+                }
+            }
+
+            // ==============================================================================
+            // Increment the background tile "pointer" one scanline vertically
+            void IncrementScrollY()
+            {
+                // Incrementing vertically is more complicated. The visible nametable
+                // is 32x30 tiles, but in memory there is enough room for 32x32 tiles.
+                // The bottom two rows of tiles are in fact not tiles at all, they
+                // contain the "attribute" information for the entire table. This is
+                // information that describes which palettes are used for different 
+                // regions of the nametable.
+
+                // In addition, the NES doesnt scroll vertically in chunks of 8 pixels
+                // i.e. the height of a tile, it can perform fine scrolling by using
+                // the fine_y component of the register. This means an increment in Y
+                // first adjusts the fine offset, but may need to adjust the whole
+                // row offset, since fine_y is a value 0 to 7, and a row is 8 pixels high
+
+                // Ony if rendering is enabled
+                if (mask[maskRenderBackground] || mask[maskRenderSprites])
+                {
+                    // If possible, just increment the fine y offset
+                    if (vram_addr[loopyFineY] < 7)
+                    {
+                        vram_addr[loopyFineY]++;
+                    }
+                    else
+                    {
+                        // If we have gone beyond the height of a row, we need to
+                        // increment the row, potentially wrapping into neighbouring
+                        // vertical nametables. Dont forget however, the bottom two rows
+                        // do not contain tile information. The coarse y offset is used
+                        // to identify which row of the nametable we want, and the fine
+                        // y offset is the specific "scanline"
+
+                        // Reset fine y offset
+                        vram_addr[loopyFineY] = 0;
+
+                        // Check if we need to swap vertical nametable targets
+                        if (vram_addr[loopyCoarseY] == 29)
+                        {
+                            // We do, so reset coarse y offset
+                            vram_addr[loopyCoarseY] = 0;
+                            // And flip the target nametable bit
+                            vram_addr[loopyNametableY] = ~vram_addr[loopyNametableY];
+                        }
+                        else if (vram_addr[loopyCoarseY] == 31)
+                        {
+                            // In case the pointer is in the attribute memory, we
+                            // just wrap around the current nametable
+                            vram_addr[loopyCoarseY] = 0;
+                        }
+                        else
+                        {
+                            // None of the above boundary/wrapping conditions apply
+                            // so just increment the coarse y offset
+                            vram_addr[loopyCoarseY]++;
+                        }
+                    }
+                }
+            }
+
+            // ==============================================================================
+            // Transfer the temporarily stored horizontal nametable access information
+            // into the "pointer". Note that fine x scrolling is not part of the "pointer"
+            // addressing mechanism
+            void TransferAddressX()
+            {
+                // Ony if rendering is enabled
+                if (mask[maskRenderBackground] || mask[maskRenderSprites])
+                {
+                    vram_addr[loopyNametableX] = tram_addr[loopyNametableX];
+                    vram_addr[loopyCoarseX] = tram_addr[loopyCoarseX];
+                }
+            }
+
+            // ==============================================================================
+            // Transfer the temporarily stored vertical nametable access information
+            // into the "pointer". Note that fine y scrolling is part of the "pointer"
+            // addressing mechanism
+            void TransferAddressY()
+            {
+                // Ony if rendering is enabled
+                if (mask[maskRenderBackground] || mask[maskRenderSprites])
+                {
+                    vram_addr[loopyFineY] = tram_addr[loopyFineY];
+                    vram_addr[loopyNametableY] = tram_addr[loopyNametableY];
+                    vram_addr[loopyCoarseY] = tram_addr[loopyCoarseY];
+                }
+            }
+
+            // ==============================================================================
+            // Prime the "in-effect" background tile shifters ready for outputting next
+            // 8 pixels in scanline.
+            void LoadBackgroundShifters()
+            {
+                // Each PPU update we calculate one pixel. These shifters shift 1 bit along
+                // feeding the pixel compositor with the binary information it needs. Its
+                // 16 bits wide, because the top 8 bits are the current 8 pixels being drawn
+                // and the bottom 8 bits are the next 8 pixels to be drawn. Naturally this means
+                // the required bit is always the MSB of the shifter. However, "fine x" scrolling
+                // plays a part in this too, whcih is seen later, so in fact we can choose
+                // any one of the top 8 bits.
+                bg_shifter_pattern_lo = (ushort)((bg_shifter_pattern_lo & 0xFF00) | bg_next_tile_lsb);
+                bg_shifter_pattern_hi = (ushort)((bg_shifter_pattern_hi & 0xFF00) | bg_next_tile_msb);
+
+                // Attribute bits do not change per pixel, rather they change every 8 pixels
+                // but are synchronised with the pattern shifters for convenience, so here
+                // we take the bottom 2 bits of the attribute word which represent which 
+                // palette is being used for the current 8 pixels and the next 8 pixels, and 
+                // "inflate" them to 8 bit words.
+                bg_shifter_attrib_lo = (ushort)((bg_shifter_attrib_lo & 0xFF00) |
+                                                 (((bg_next_tile_attrib & 0b01) != 0) ? 0xFF : 0x00));
+                bg_shifter_attrib_hi = (ushort)((bg_shifter_attrib_hi & 0xFF00) |
+                                                 (((bg_next_tile_attrib & 0b10) != 0) ? 0xFF : 0x00));
+            }
+
+            ;
+
+
+            // ==============================================================================
+            // Every cycle the shifters storing pattern and attribute information shift
+            // their contents by 1 bit. This is because every cycle, the output progresses
+            // by 1 pixel. This means relatively, the state of the shifter is in sync
+            // with the pixels being drawn for that 8 pixel section of the scanline.
+            void UpdateShifters()
+            {
+                if (mask[maskRenderBackground])
+                {
+                    // Shifting background tile pattern row
+                    bg_shifter_pattern_lo <<= 1;
+                    bg_shifter_pattern_hi <<= 1;
+
+                    // Shifting palette attributes by 1
+                    bg_shifter_attrib_lo <<= 1;
+                    bg_shifter_attrib_hi <<= 1;
+                }
+            }
+
+            ;
+
+            // All but 1 of the secanlines is visible to the user. The pre-render scanline
+            // at -1, is used to configure the "shifters" for the first visible scanline, 0.
+            if (scanline >= -1 && scanline < 240)
+            {
+                if (scanline == 0 && cycle == 0)
+                {
+                    // "Odd Frame" cycle skip
+                    cycle = 1;
+                }
+
+                if (scanline == -1 && cycle == 1)
+                {
+                    // Effectively start of new frame, so clear vertical blank flag
+                    status[statusVerticalBlank] = 0;
+                }
+
+
+                if ((cycle >= 2 && cycle < 258) || (cycle >= 321 && cycle < 338))
+                {
+                    UpdateShifters();
+
+
+                    // In these cycles we are collecting and working with visible data
+                    // The "shifters" have been preloaded by the end of the previous
+                    // scanline with the data for the start of this scanline. Once we
+                    // leave the visible region, we go dormant until the shifters are
+                    // preloaded for the next scanline.
+
+                    // Fortunately, for background rendering, we go through a fairly
+                    // repeatable sequence of events, every 2 clock cycles.
+                    switch ((cycle - 1) % 8)
+                    {
+                        case 0:
+                            // Load the current background tile pattern and attributes into the "shifter"
+                            LoadBackgroundShifters();
+
+                            // Fetch the next background tile ID
+                            // "(vram_addr.reg & 0x0FFF)" : Mask to 12 bits that are relevant
+                            // "| 0x2000"                 : Offset into nametable space on PPU address bus
+                            bg_next_tile_id = PpuRead((ushort)(0x2000 | (vram_addr.Data & 0x0FFF)));
+
+                            // Explanation:
+                            // The bottom 12 bits of the loopy register provide an index into
+                            // the 4 nametables, regardless of nametable mirroring configuration.
+                            // nametable_y(1) nametable_x(1) coarse_y(5) coarse_x(5)
+                            //
+                            // Consider a single nametable is a 32x32 array, and we have four of them
+                            //   0                1
+                            // 0 +----------------+----------------+
+                            //   |                |                |
+                            //   |                |                |
+                            //   |    (32x32)     |    (32x32)     |
+                            //   |                |                |
+                            //   |                |                |
+                            // 1 +----------------+----------------+
+                            //   |                |                |
+                            //   |                |                |
+                            //   |    (32x32)     |    (32x32)     |
+                            //   |                |                |
+                            //   |                |                |
+                            //   +----------------+----------------+
+                            //
+                            // This means there are 4096 potential locations in this array, which 
+                            // just so happens to be 2^12!
+                            break;
+                        case 2:
+                            // Fetch the next background tile attribute. OK, so this one is a bit
+                            // more involved :P
+
+                            // Recall that each nametable has two rows of cells that are not tile 
+                            // information, instead they represent the attribute information that
+                            // indicates which palettes are applied to which area on the screen.
+                            // Importantly (and frustratingly) there is not a 1 to 1 correspondance
+                            // between background tile and palette. Two rows of tile data holds
+                            // 64 attributes. Therfore we can assume that the attributes affect
+                            // 8x8 zones on the screen for that nametable. Given a working resolution
+                            // of 256x240, we can further assume that each zone is 32x32 pixels
+                            // in screen space, or 4x4 tiles. Four system palettes are allocated
+                            // to background rendering, so a palette can be specified using just
+                            // 2 bits. The attribute byte therefore can specify 4 distinct palettes.
+                            // Therefore we can even further assume that a single palette is
+                            // applied to a 2x2 tile combination of the 4x4 tile zone. The very fact
+                            // that background tiles "share" a palette locally is the reason why
+                            // in some games you see distortion in the colours at screen edges.
+
+                            // As before when choosing the tile ID, we can use the bottom 12 bits of
+                            // the loopy register, but we need to make the implementation "coarser"
+                            // because instead of a specific tile, we want the attribute byte for a 
+                            // group of 4x4 tiles, or in other words, we divide our 32x32 address
+                            // by 4 to give us an equivalent 8x8 address, and we offset this address
+                            // into the attribute section of the target nametable.
+
+                            // Reconstruct the 12 bit loopy address into an offset into the
+                            // attribute memory
+
+                            // "(vram_addr[loopyCoarseX] >> 2)"        : integer divide coarse x by 4, 
+                            //                                      from 5 bits to 3 bits
+                            // "((vram_addr[loopyCoarseY] >> 2) << 3)" : integer divide coarse y by 4, 
+                            //                                      from 5 bits to 3 bits,
+                            //                                      shift to make room for coarse x
+
+                            // Result so far: YX00 00yy yxxx
+
+                            // All attribute memory begins at 0x03C0 within a nametable, so OR with
+                            // result to select target nametable, and attribute byte offset. Finally        
+                            // OR with 0x2000 to offset into nametable address space on PPU bus.				
+                            bg_next_tile_attrib = PpuRead((ushort)(0x23C0 | (vram_addr[loopyNametableY] << 11)
+                                                                           | (vram_addr[loopyNametableX] << 10)
+                                                                           | ((vram_addr[loopyCoarseY] >> 2) << 3)
+                                                                           | (vram_addr[loopyCoarseX] >> 2)));
+
+                            // Right we've read the correct attribute byte for a specified address,
+                            // but the byte itself is broken down further into the 2x2 tile groups
+                            // in the 4x4 attribute zone.
+
+                            // The attribute byte is assembled thus: BR(76) BL(54) TR(32) TL(10)
+                            //
+                            // +----+----+			    +----+----+
+                            // | TL | TR |			    | ID | ID |
+                            // +----+----+ where TL =   +----+----+
+                            // | BL | BR |			    | ID | ID |
+                            // +----+----+			    +----+----+
+                            //
+                            // Since we know we can access a tile directly from the 12 bit address, we
+                            // can analyse the bottom bits of the coarse coordinates to provide us with
+                            // the correct offset into the 8-bit word, to yield the 2 bits we are
+                            // actually interested in which specifies the palette for the 2x2 group of
+                            // tiles. We know if "coarse y % 4" < 2 we are in the top half else bottom half.
+                            // Likewise if "coarse x % 4" < 2 we are in the left half else right half.
+                            // Ultimately we want the bottom two bits of our attribute word to be the
+                            // palette selected. So shift as required...				
+                            if ((vram_addr[loopyCoarseY] & 0x02) != 0) bg_next_tile_attrib >>= 4;
+                            if ((vram_addr[loopyCoarseX] & 0x02) != 0) bg_next_tile_attrib >>= 2;
+                            bg_next_tile_attrib &= 0x03;
+                            break;
+
+                        // Compared to the last two, the next two are the easy ones... :P
+
+                        case 4:
+                            // Fetch the next background tile LSB bit plane from the pattern memory
+                            // The Tile ID has been read from the nametable. We will use this id to 
+                            // index into the pattern memory to find the correct sprite (assuming
+                            // the sprites lie on 8x8 pixel boundaries in that memory, which they do
+                            // even though 8x16 sprites exist, as background tiles are always 8x8).
+                            //
+                            // Since the sprites are effectively 1 bit deep, but 8 pixels wide, we 
+                            // can represent a whole sprite row as a single byte, so offsetting
+                            // into the pattern memory is easy. In total there is 8KB so we need a 
+                            // 13 bit address.
+
+                            // "(control.pattern_background << 12)"  : the pattern memory selector 
+                            //                                         from control register, either 0K
+                            //                                         or 4K offset
+                            // "((ushort)bg_next_tile_id << 4)"    : the tile id multiplied by 16, as
+                            //                                         2 lots of 8 rows of 8 bit pixels
+                            // "(vram_addr[loopyFineY])"                  : Offset into which row based on
+                            //                                         vertical scroll offset
+                            // "+ 0"                                 : Mental clarity for plane offset
+                            // Note: No PPU address bus offset required as it starts at 0x0000
+                            bg_next_tile_lsb = PpuRead((ushort)(((control[controlPatternBackground] ? 1 : 0) << 12)
+                                                                 + (bg_next_tile_id << 4)
+                                                                 + (vram_addr[loopyFineY]) + 0));
+
+                            break;
+                        case 6:
+                            // Fetch the next background tile MSB bit plane from the pattern memory
+                            // This is the same as above, but has a +8 offset to select the next bit plane
+                            bg_next_tile_msb = PpuRead((ushort)(((control[controlPatternBackground] ? 1 : 0) << 12)
+                                                                 + (bg_next_tile_id << 4)
+                                                                 + (vram_addr[loopyFineY]) + 8));
+                            break;
+                        case 7:
+                            // Increment the background tile "pointer" to the next tile horizontally
+                            // in the nametable memory. Note this may cross nametable boundaries which
+                            // is a little complex, but essential to implement scrolling
+                            IncrementScrollX();
+                            break;
+                    }
+                }
+
+                // End of a visible scanline, so increment downwards...
+                if (cycle == 256)
+                {
+                    IncrementScrollY();
+                }
+
+                //...and reset the x position
+                if (cycle == 257)
+                {
+                    LoadBackgroundShifters();
+                    TransferAddressX();
+                }
+
+                // Superfluous reads of tile id at end of scanline
+                if (cycle == 338 || cycle == 340)
+                {
+                    bg_next_tile_id = PpuRead((ushort)(0x2000 | (vram_addr.Data & 0x0FFF)));
+                }
+
+                if (scanline == -1 && cycle >= 280 && cycle < 305)
+                {
+                    // End of vertical blank period so reset the Y address ready for rendering
+                    TransferAddressY();
+                }
+            }
+
+            if (scanline == 240)
+            {
+                // Post Render Scanline - Do Nothing!
+            }
+
+            if (scanline >= 241 && scanline < 261)
+            {
+                if (scanline == 241 && cycle == 1)
+                {
+                    // Effectively end of frame, so set vertical blank flag
+                    status[statusVerticalBlank] = 1;
+
+                    // If the control register tells us to emit a NMI when
+                    // entering vertical blanking period, do it! The CPU
+                    // will be informed that rendering is complete so it can
+                    // perform operations with the PPU knowing it wont
+                    // produce visible artefacts
+                    if (control[controlEnableNmi])
+                    {
+                        Nmi = true;
+                    }
+                }
+            }
+
+
+
+            // Composition - We now have background pixel information for this cycle
+            // At this point we are only interested in background
+
+            byte bg_pixel = 0x00; // The 2-bit pixel to be rendered
+            byte bg_palette = 0x00; // The 3-bit index of the palette the pixel indexes
+
+            // We only render backgrounds if the PPU is enabled to do so. Note if 
+            // background rendering is disabled, the pixel and palette combine
+            // to form 0x00. This will fall through the colour tables to yield
+            // the current background colour in effect
+            if (mask[maskRenderBackground])
+            {
+                // Handle Pixel Selection by selecting the relevant bit
+                // depending upon fine x scolling. This has the effect of
+                // offsetting ALL background rendering by a set number
+                // of pixels, permitting smooth scrolling
+                ushort bit_mux = (ushort)(0x8000 >> fine_x);
+
+                // Select Plane pixels by extracting from the shifter 
+                // at the required location. 
+                byte p0_pixel = (bg_shifter_pattern_lo & bit_mux) > 0 ? 1 : 0;
+                byte p1_pixel = (bg_shifter_pattern_hi & bit_mux) > 0 ? 1 : 0;
+
+                // Combine to form pixel index
+                bg_pixel = (byte)((p1_pixel << 1) | p0_pixel);
+
+                // Get palette
+                byte bg_pal0 = (bg_shifter_attrib_lo & bit_mux) > 0 ? 1 : 0;
+                byte bg_pal1 = (bg_shifter_attrib_hi & bit_mux) > 0 ? 1 : 0;
+                bg_palette = (byte)((bg_pal1 << 1) | bg_pal0);
+            }
+
+            // Now we have a final pixel colour, and a palette for this cycle
+            // of the current scanline. Let's at long last, draw that ^&%*er :P
+
+            sprScreen.SetPixel(cycle - 1, scanline, GetColourFromPaletteRam(bg_palette, bg_pixel));
+
+            // Fake some noise for now
+            //sprScreen.SetPixel(cycle - 1, scanline, palScreen[(rand() % 2) ? 0x3F : 0x30]);
+
+            // Advance renderer - it never stops, it's relentless
+            cycle++;
+            if (cycle >= 341)
+            {
+                cycle = 0;
+                scanline++;
+                if (scanline >= 261)
+                {
+                    scanline = -1;
+                    HasCompletedFrame = true;
+                }
+            }
+        }
+    }
+}

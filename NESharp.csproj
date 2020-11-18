@@ -8,8 +8,11 @@
 
   <ItemGroup>
     <Compile Remove="TestRoms\**" />
+    <Compile Remove="x64\**" />
     <EmbeddedResource Remove="TestRoms\**" />
+    <EmbeddedResource Remove="x64\**" />
     <None Remove="TestRoms\**" />
+    <None Remove="x64\**" />
   </ItemGroup>
 
   <ItemGroup>

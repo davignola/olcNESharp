@@ -9,6 +9,6 @@ namespace NESharp.Components
     public interface IIODevice
     {
         void CpuWrite(ushort address, byte data);
-        byte CpuRead(ushort address);
+        byte CpuRead(ushort address, bool asReadonly);
     }
 }

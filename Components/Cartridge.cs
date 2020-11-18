@@ -86,7 +86,7 @@ namespace NESharp.Components
 
             public HeaderINES(byte[] rawHeader)
             {
-                Name = Encoding.UTF8.GetString(rawHeader, 0, 4);
+                Name = Encoding.ASCII.GetString(rawHeader, 0, 4);
                 Prg_rom_chunks = rawHeader[4];
                 Chr_rom_chunks = rawHeader[5];
                 Mapper1 = rawHeader[6];
@@ -94,7 +94,7 @@ namespace NESharp.Components
                 Prg_ram_size = rawHeader[8];
                 Tv_system1 = rawHeader[9];
                 Tv_system2 = rawHeader[10];
-                Name = Encoding.UTF8.GetString(rawHeader, 11, 5);
+                Unused = Encoding.ASCII.GetString(rawHeader, 11, 5);
             }
         }
 
@@ -233,6 +233,13 @@ namespace NESharp.Components
             }
 
             return false;
+        }
+
+        public void Reset()
+        {
+            // Note: This does not reset the ROM contents,
+            // but does reset the mapper.
+            pMapper?.Reset();
         }
     }
 }

@@ -72,6 +72,10 @@ namespace NESharp
         public List<byte> Ram { get; private set; }
         public Cartridge Cartridge { get; private set; }
 
+        // Controllers
+        public byte[] Controller { get; set; }
+        public byte[] ControllerState { get; set; }
+
         public NesBus()
         {
             // Connect devices
@@ -83,6 +87,10 @@ namespace NESharp
 
             // init 2k RAM
             Ram = Enumerable.Repeat((byte)0, 2 * 1024).ToList();
+
+            // Controlers
+            Controller = new byte[] { 0x00, 0x00 };
+            ControllerState = new byte[] { 0x00, 0x00 };
         }
 
         public void InsertCartridge(Cartridge cartridge)
@@ -91,9 +99,16 @@ namespace NESharp
             Ppu2C02.ConnectCartridge(cartridge);
         }
 
-        public void Reset()
+        public void Reset(bool hardReset = false)
         {
+            if (hardReset)
+            {
+                Ram = Enumerable.Repeat((byte)0, 2 * 1024).ToList();
+            }
+
+            Cartridge.Reset();
             Cpu6502.Reset();
+            Ppu2C02.Reset();
             SystemClockCounter = 0;
         }
 
@@ -116,6 +131,15 @@ namespace NESharp
             if (SystemClockCounter % 3 == 0)
             {
                 Cpu6502.Clock();
+            }
+
+            // The PPU is capable of emitting an interrupt to indicate the
+            // vertical blanking period has been entered. If it has, we need
+            // to send that irq to the CPU.
+            if (Ppu2C02.Nmi)
+            {
+                Ppu2C02.Nmi = false;
+                Cpu6502.NMI();
             }
 
             SystemClockCounter++;
@@ -146,11 +170,15 @@ namespace NESharp
                 // and these are repeated throughout this range. We can
                 // use bitwise AND operation to mask the bottom 3 bits, 
                 // which is the equivalent of addr % 8.
-                //ppu.cpuWrite(address & 0x0007, data);
+                Ppu2C02.CpuWrite((ushort)(address & 0x0007), data);
+            }
+            else if (address >= 0x4016 && address <= 0x4017)
+            {
+                ControllerState[address & 0x0001] = Controller[address & 0x0001];
             }
         }
 
-        public byte CpuRead(ushort address)
+        public byte CpuRead(ushort address, bool asReadOnly)
         {
             byte data = 0x00;
 
@@ -166,7 +194,12 @@ namespace NESharp
             else if (address >= 0x2000 && address <= 0x3FFF)
             {
                 // PPU Address range, mirrored every 8
-                //data = ppu.cpuRead(addr & 0x0007, bReadOnly);
+                data = Ppu2C02.CpuRead((ushort)(address & 0x0007), asReadOnly);
+            }
+            else if (address >= 0x4016 && address <= 0x4017)
+            {
+                data = (ControllerState[address & 0x0001] & 0x80) > 0 ? 1 : 0;
+                ControllerState[address & 0x0001] <<= 1;
             }
 
             return data;
