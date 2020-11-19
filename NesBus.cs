@@ -67,6 +67,26 @@ namespace NESharp
     public sealed class NesBus : IIODevice
     {
         private int SystemClockCounter { get; set; } = 0;
+        // A simple form of Direct Memory Access is used to swiftly
+        // transfer data from CPU bus memory into the OAM memory. It would
+        // take too long to sensibly do this manually using a CPU loop, so
+        // the program prepares a page of memory with the sprite info required
+        // for the next frame and initiates a DMA transfer. This suspends the
+        // CPU momentarily while the PPU gets sent data at PPU clock speeds.
+        // Note here, that dma_page and dma_addr form a 16-bit address in 
+        // the CPU bus address space
+        byte dma_page = 0x00;
+        byte dma_addr = 0x00;
+        byte dma_data = 0x00;
+
+        // DMA transfers need to be timed accurately. In principle it takes
+        // 512 cycles to read and write the 256 bytes of the OAM memory, a
+        // read followed by a write. However, the CPU needs to be on an "even"
+        // clock cycle, so a dummy cycle of idleness may be required
+        bool dma_dummy = true;
+
+        // Finally a flag to indicate that a DMA transfer is happening
+        bool dma_transfer = false;
         public Cpu6502 Cpu6502 { get; private set; }
         public Ppu2C02 Ppu2C02 { get; private set; }
         public List<byte> Ram { get; private set; }
@@ -110,6 +130,11 @@ namespace NESharp
             Cpu6502.Reset();
             Ppu2C02.Reset();
             SystemClockCounter = 0;
+            dma_page = 0x00;
+            dma_addr = 0x00;
+            dma_data = 0x00;
+            dma_dummy = true;
+            dma_transfer = false;
         }
 
         public void Clock()
@@ -130,7 +155,54 @@ namespace NESharp
             // have a global counter to keep track of this.
             if (SystemClockCounter % 3 == 0)
             {
-                Cpu6502.Clock();
+                // Is the system performing a DMA transfer form CPU memory to 
+                // OAM memory on PPU?...
+                if (dma_transfer)
+                {
+                    // ...Yes! We need to wait until the next even CPU clock cycle
+                    // before it starts...
+                    if (dma_dummy)
+                    {
+                        // ...So hang around in here each clock until 1 or 2 cycles
+                        // have elapsed...
+                        if (SystemClockCounter % 2 == 1)
+                        {
+                            // ...and finally allow DMA to start
+                            dma_dummy = false;
+                        }
+                    }
+                    else
+                    {
+                        // DMA can take place!
+                        if (SystemClockCounter % 2 == 0)
+                        {
+                            // On even clock cycles, read from CPU bus
+                            dma_data = CpuRead((ushort)(dma_page << 8 | dma_addr), false);
+                        }
+                        else
+                        {
+                            // On odd clock cycles, write to PPU OAM
+                            Ppu2C02.OAM[dma_addr] = dma_data;
+                            // Increment the lo byte of the address
+                            dma_addr++;
+                            // If this wraps around, we know that 256
+                            // bytes have been written, so end the DMA
+                            // transfer, and proceed as normal
+                            if (dma_addr == 0x00)
+                            {
+                                dma_transfer = false;
+                                dma_dummy = true;
+                            }
+                        }
+                    }
+                }
+                else
+                {
+                    // No DMA happening, the CPU is in control of its
+                    // own destiny. Go forth my friend and calculate
+                    // awesomeness for many generations to come...
+                    Cpu6502.Clock();
+                }
             }
 
             // The PPU is capable of emitting an interrupt to indicate the
@@ -172,8 +244,16 @@ namespace NESharp
                 // which is the equivalent of addr % 8.
                 Ppu2C02.CpuWrite((ushort)(address & 0x0007), data);
             }
+            else if (address == 0x4014)
+            {
+                // A write to this address initiates a DMA transfer
+                dma_page = data;
+                dma_addr = 0x00;
+                dma_transfer = true;
+            }
             else if (address >= 0x4016 && address <= 0x4017)
             {
+                // "Lock In" controller state at this time
                 ControllerState[address & 0x0001] = Controller[address & 0x0001];
             }
         }
@@ -198,6 +278,7 @@ namespace NESharp
             }
             else if (address >= 0x4016 && address <= 0x4017)
             {
+                // Read out the MSB of the controller status word
                 data = (ControllerState[address & 0x0001] & 0x80) > 0 ? 1 : 0;
                 ControllerState[address & 0x0001] <<= 1;
             }

@@ -60,6 +60,7 @@ using System.Collections.Generic;
 using System.Collections.Specialized;
 using System.Linq;
 using System.Runtime.CompilerServices;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
 using olc.wrapper;
@@ -146,7 +147,7 @@ namespace NESharp.Components
         private short scanline = 0;
         private short cycle = 0;
 
-        // Background rendering
+        // Background rendering =========================================
         byte bg_next_tile_id = 0x00;
         byte bg_next_tile_attrib = 0x00;
         byte bg_next_tile_lsb = 0x00;
@@ -155,6 +156,48 @@ namespace NESharp.Components
         ushort bg_shifter_pattern_hi = 0x0000;
         ushort bg_shifter_attrib_lo = 0x0000;
         ushort bg_shifter_attrib_hi = 0x0000;
+
+
+
+        // Foreground "Sprite" rendering ================================
+        // The OAM is an additional memory internal to the PPU. It is
+        // not connected via the any bus. It stores the locations of
+        // 64off 8x8 (or 8x16) tiles to be drawn on the next frame.
+        [StructLayout(LayoutKind.Explicit, Pack = 1)]
+        struct sObjectAttributeEntry
+        {
+            [FieldOffset(0)] public uint entry;      // This whole struct (union)
+            [FieldOffset(0)] public byte y;          // Y position of sprite
+            [FieldOffset(1)] public byte id;         // ID of tile from pattern memory
+            [FieldOffset(2)] public byte attribute;  // Flags define how sprite should be rendered
+            [FieldOffset(3)] public byte x;          // X position of sprite
+        }
+
+        // The OAM is conveniently package above to work with, but the DMA
+        // mechanism will need access to it for writing one byte at a time
+        private IntPtr pOAM;
+
+        // C# version has a raw byte array that we can map to the struct using GChandles
+        // This allow access per byte in a managed way.
+        public byte[] OAM = new byte[4 * 64];
+
+        // A register to store the address when the CPU manually communicates
+        // with OAM via PPU registers. This is not commonly used because it 
+        // is very slow, and instead a 256-Byte DMA transfer is used. See
+        // the Bus header for a description of this.
+        byte oam_addr = 0x00;
+
+        sObjectAttributeEntry[] spriteScanline = new sObjectAttributeEntry[8];
+        byte sprite_count;
+        byte[] sprite_shifter_pattern_lo = new byte[8];
+        byte[] sprite_shifter_pattern_hi = new byte[8];
+
+        // Sprite Zero Collision Flags
+        bool bSpriteZeroHitPossible = false;
+        bool bSpriteZeroBeingRendered = false;
+
+
+
 
         public IIODevice Bus { get; private set; }
         public bool HasCompletedFrame { get; set; } = false;
@@ -269,6 +312,46 @@ namespace NESharp.Components
             loopyNametableY = BitVector32.CreateSection(1);
             loopyFineY = BitVector32.CreateSection(3);
             loopyUnused = BitVector32.CreateSection(1);
+
+        }
+
+        private void UpdateOAMPtr()
+        {
+            // Get handle of the OAM array
+            var handle = GCHandle.Alloc(OAM, GCHandleType.Pinned);
+            try
+            {
+                pOAM = handle.AddrOfPinnedObject();
+            }
+            finally
+            {
+                handle.Free();
+            }
+        }
+
+        /// <summary>
+        /// Helper method to get part of a byte array interpreted as a struct
+        /// Overrall mechanic tolen in part from here:
+        /// https://stackoverflow.com/questions/2871/reading-a-c-c-data-structure-in-c-sharp-from-a-byte-array
+        /// But made it staticaly defined
+        /// We add the offset to the pointer to emulate accessor of a sObjectAttributeEntry[]
+        /// </summary>
+        /// <typeparam name="T"></typeparam>
+        /// <param name="bytes"></param>
+        /// <returns></returns>
+        sObjectAttributeEntry GetObjectAttribute(byte offset)
+        {
+            return (sObjectAttributeEntry)Marshal.PtrToStructure(pOAM + (offset * 4), typeof(sObjectAttributeEntry));
+        }
+
+        /// <summary>
+        /// And the opposite operation
+        /// </summary>
+        /// <param name="offset"></param>
+        /// <returns></returns>
+        void GetObjectAttribute(byte offset, sObjectAttributeEntry entry)
+        {
+            Marshal.StructureToPtr(entry, pOAM + (offset * 4), false);
         }
 
         public void ConnectBus(IIODevice bus)
@@ -356,7 +439,7 @@ namespace NESharp.Components
                         {
                             // We can get the index value by simply adding the bits together
                             // but we're only interested in the lsb of the row words because...
-                            byte pixel = (byte)((tile_lsb & 0x01) + (tile_msb & 0x01));
+                            byte pixel = (byte)((tile_lsb & 0x01) << 1 | (tile_msb & 0x01));
 
                             // ...we will shift the row words 1 bit right for each column of
                             // the character.
@@ -468,11 +551,13 @@ namespace NESharp.Components
                         address_latch = 0;
                         break;
 
-                    // OAM Address
+                    // OAM Address - Not Readable
                     case 0x0003: break;
 
                     // OAM Data
-                    case 0x0004: break;
+                    case 0x0004:
+                        data = OAM[oam_addr];
+                        break;
 
                     // Scroll - Not Readable
                     case 0x0005: break;
@@ -519,8 +604,10 @@ namespace NESharp.Components
                 case 0x0002: // Status
                     break;
                 case 0x0003: // OAM Address
+                    oam_addr = data;
                     break;
                 case 0x0004: // OAM Data
+                    OAM[oam_addr] = data;
                     break;
                 case 0x0005: // Scroll
                     if (address_latch == 0)
@@ -889,16 +976,36 @@ namespace NESharp.Components
                     bg_shifter_attrib_lo <<= 1;
                     bg_shifter_attrib_hi <<= 1;
                 }
-            }
 
-            ;
+
+                if (mask[maskRenderSprites] && cycle >= 1 && cycle < 258)
+                {
+                    for (int i = 0; i < sprite_count; i++)
+                    {
+                        if (spriteScanline[i].x > 0)
+                        {
+                            spriteScanline[i].x--;
+                        }
+                        else
+                        {
+                            sprite_shifter_pattern_lo[i] <<= 1;
+                            sprite_shifter_pattern_hi[i] <<= 1;
+                        }
+                    }
+                }
+            }
 
             // All but 1 of the secanlines is visible to the user. The pre-render scanline
             // at -1, is used to configure the "shifters" for the first visible scanline, 0.
             if (scanline >= -1 && scanline < 240)
             {
+                // Background Rendering ======================================================
+
                 if (scanline == 0 && cycle == 0)
                 {
+                    // Update une OAM pointer GC somethime move the array around early on
+                    UpdateOAMPtr();
+
                     // "Odd Frame" cycle skip
                     cycle = 1;
                 }
@@ -907,6 +1014,19 @@ namespace NESharp.Components
                 {
                     // Effectively start of new frame, so clear vertical blank flag
                     status[statusVerticalBlank] = 0;
+
+                    // Clear sprite overflow flag
+                    status[statusSpriteOverflow] = 0;
+
+                    // Clear the sprite zero hit flag
+                    status[statusSpriteZeroHit] = 0;
+
+                    // Clear Shifters
+                    for (int i = 0; i < 8; i++)
+                    {
+                        sprite_shifter_pattern_lo[i] = 0;
+                        sprite_shifter_pattern_hi[i] = 0;
+                    }
                 }
 
 
@@ -1097,6 +1217,217 @@ namespace NESharp.Components
                     // End of vertical blank period so reset the Y address ready for rendering
                     TransferAddressY();
                 }
+
+
+                // Foreground Rendering ========================================================
+                // I'm gonna cheat a bit here, which may reduce compatibility, but greatly
+                // simplifies delivering an intuitive understanding of what exactly is going
+                // on. The PPU loads sprite information successively during the region that
+                // background tiles are not being drawn. Instead, I'm going to perform
+                // all sprite evaluation in one hit. THE NES DOES NOT DO IT LIKE THIS! This makes
+                // it easier to see the process of sprite evaluation.
+                if (cycle == 257 && scanline >= 0)
+                {
+                    // We've reached the end of a visible scanline. It is now time to determine
+                    // which sprites are visible on the next scanline, and preload this info
+                    // into buffers that we can work with while the scanline scans the row.
+
+                    // Firstly, clear out the sprite memory. This memory is used to store the
+                    // sprites to be rendered. It is not the OAM.
+                    for (var i = 0; i < spriteScanline.Length; i++) { spriteScanline[i].entry = uint.MaxValue; }
+
+
+                    // The NES supports a maximum number of sprites per scanline. Nominally
+                    // this is 8 or fewer sprites. This is why in some games you see sprites
+                    // flicker or disappear when the scene gets busy.
+                    sprite_count = 0;
+
+                    // Secondly, clear out any residual information in sprite pattern shifters
+                    for (byte i = 0; i < 8; i++)
+                    {
+                        sprite_shifter_pattern_lo[i] = 0;
+                        sprite_shifter_pattern_hi[i] = 0;
+                    }
+
+                    // Thirdly, Evaluate which sprites are visible in the next scanline. We need
+                    // to iterate through the OAM until we have found 8 sprites that have Y-positions
+                    // and heights that are within vertical range of the next scanline. Once we have
+                    // found 8 or exhausted the OAM we stop. Now, notice I count to 9 sprites. This
+                    // is so I can set the sprite overflow flag in the event of there being > 8 sprites.
+                    byte nOAMEntry = 0;
+
+                    // New set of sprites. Sprite zero may not exist in the new set, so clear this
+                    // flag.
+                    bSpriteZeroHitPossible = false;
+
+                    while (nOAMEntry < 64 && sprite_count < 9)
+                    {
+                        // Note the conversion to signed numbers here
+                        short diff = (short)(scanline - GetObjectAttribute(nOAMEntry).y);
+
+                        // If the difference is positive then the scanline is at least at the
+                        // same height as the sprite, so check if it resides in the sprite vertically
+                        // depending on the current "sprite height mode"
+                        // FLAGGED
+
+                        if (diff >= 0 && diff < (control[controlSpriteSize] ? 16 : 8))
+                        {
+                            // Sprite is visible, so copy the attribute entry over to our
+                            // scanline sprite cache. Ive added < 8 here to guard the array
+                            // being written to.
+                            if (sprite_count < 8)
+                            {
+                                // Is this sprite sprite zero?
+                                if (nOAMEntry == 0)
+                                {
+                                    // It is, so its possible it may trigger a 
+                                    // sprite zero hit when drawn
+                                    bSpriteZeroHitPossible = true;
+                                }
+                                spriteScanline[sprite_count] = GetObjectAttribute(nOAMEntry);
+                                sprite_count++;
+                            }
+                        }
+
+                        nOAMEntry++;
+                    } // End of sprite evaluation for next scanline
+
+                    // Set sprite overflow flag
+                    status[statusSpriteOverflow] = (sprite_count > 8) ? 1 : 0;
+
+                    // Now we have an array of the 8 visible sprites for the next scanline. By 
+                    // the nature of this search, they are also ranked in priority, because
+                    // those lower down in the OAM have the higher priority.
+
+                    // We also guarantee that "Sprite Zero" will exist in spriteScanline[0] if
+                    // it is evaluated to be visible. 
+                }
+
+                if (cycle == 340)
+                {
+                    // Now we're at the very end of the scanline, I'm going to prepare the 
+                    // sprite shifters with the 8 or less selected sprites.
+
+                    for (byte i = 0; i < sprite_count; i++)
+                    {
+                        // We need to extract the 8-bit row patterns of the sprite with the
+                        // correct vertical offset. The "Sprite Mode" also affects this as
+                        // the sprites may be 8 or 16 rows high. Additionally, the sprite
+                        // can be flipped both vertically and horizontally. So there's a lot
+                        // going on here :P
+
+                        byte sprite_pattern_bits_lo, sprite_pattern_bits_hi;
+                        ushort sprite_pattern_addr_lo, sprite_pattern_addr_hi;
+
+                        // Determine the memory addresses that contain the byte of pattern data. We
+                        // only need the lo pattern address, because the hi pattern address is always
+                        // offset by 8 from the lo address.
+                        if (!control[controlSpriteSize])
+                        {
+                            // 8x8 Sprite Mode - The control register determines the pattern table
+                            if ((spriteScanline[i].attribute & 0x80) == 0)
+                            {
+                                // Sprite is NOT flipped vertically, i.e. normal    
+                                sprite_pattern_addr_lo = (ushort)(
+                                  (control[controlPatternSprite] ? 1 : 0 << 12)  // Which Pattern Table? 0KB or 4KB offset
+                                | (spriteScanline[i].id << 4)  // Which Cell? Tile ID * 16 (16 bytes per tile)
+                                | (scanline - spriteScanline[i].y)); // Which Row in cell? (0->7)
+
+                            }
+                            else
+                            {
+                                // Sprite is flipped vertically, i.e. upside down
+                                sprite_pattern_addr_lo = (ushort)(
+                                  (control[controlPatternSprite] ? 1 : 0 << 12)  // Which Pattern Table? 0KB or 4KB offset
+                                | (spriteScanline[i].id << 4)  // Which Cell? Tile ID * 16 (16 bytes per tile)
+                                | (7 - (scanline - spriteScanline[i].y))); // Which Row in cell? (7->0)
+                            }
+
+                        }
+                        else
+                        {
+                            // 8x16 Sprite Mode - The sprite attribute determines the pattern table
+                            if ((spriteScanline[i].attribute & 0x80) == 0)
+                            {
+                                // Sprite is NOT flipped vertically, i.e. normal
+                                if (scanline - spriteScanline[i].y < 8)
+                                {
+                                    // Reading Top half Tile
+                                    sprite_pattern_addr_lo = (ushort)(
+                                      ((spriteScanline[i].id & 0x01) << 12)  // Which Pattern Table? 0KB or 4KB offset
+                                    | ((spriteScanline[i].id & 0xFE) << 4)  // Which Cell? Tile ID * 16 (16 bytes per tile)
+                                    | ((scanline - spriteScanline[i].y) & 0x07)); // Which Row in cell? (0->7)
+                                }
+                                else
+                                {
+                                    // Reading Bottom Half Tile
+                                    sprite_pattern_addr_lo = (ushort)(
+                                      ((spriteScanline[i].id & 0x01) << 12)  // Which Pattern Table? 0KB or 4KB offset
+                                    | (((spriteScanline[i].id & 0xFE) + 1) << 4)  // Which Cell? Tile ID * 16 (16 bytes per tile)
+                                    | ((scanline - spriteScanline[i].y) & 0x07)); // Which Row in cell? (0->7)
+                                }
+                            }
+                            else
+                            {
+                                // Sprite is flipped vertically, i.e. upside down
+                                if (scanline - spriteScanline[i].y < 8)
+                                {
+                                    // Reading Top half Tile
+                                    sprite_pattern_addr_lo = (ushort)(
+                                      ((spriteScanline[i].id & 0x01) << 12)    // Which Pattern Table? 0KB or 4KB offset
+                                    | (((spriteScanline[i].id & 0xFE) + 1) << 4)    // Which Cell? Tile ID * 16 (16 bytes per tile)
+                                    | (7 - (scanline - spriteScanline[i].y) & 0x07)); // Which Row in cell? (0->7)
+                                }
+                                else
+                                {
+                                    // Reading Bottom Half Tile
+                                    sprite_pattern_addr_lo = (ushort)(
+                                      ((spriteScanline[i].id & 0x01) << 12)    // Which Pattern Table? 0KB or 4KB offset
+                                    | ((spriteScanline[i].id & 0xFE) << 4)    // Which Cell? Tile ID * 16 (16 bytes per tile)
+                                    | (7 - (scanline - spriteScanline[i].y) & 0x07)); // Which Row in cell? (0->7)
+                                }
+                            }
+                        }
+
+                        // Phew... XD I'm absolutely certain you can use some fantastic bit 
+                        // manipulation to reduce all of that to a few one liners, but in this
+                        // form it's easy to see the processes required for the different
+                        // sizes and vertical orientations
+
+                        // Hi bit plane equivalent is always offset by 8 bytes from lo bit plane
+                        sprite_pattern_addr_hi = (ushort)(sprite_pattern_addr_lo + 8);
+
+                        // Now we have the address of the sprite patterns, we can read them
+                        sprite_pattern_bits_lo = PpuRead(sprite_pattern_addr_lo);
+                        sprite_pattern_bits_hi = PpuRead(sprite_pattern_addr_hi);
+
+                        // If the sprite is flipped horizontally, we need to flip the 
+                        // pattern bytes. 
+                        if ((spriteScanline[i].attribute & 0x40) != 0)
+                        {
+                            // This little lambda function "flips" a byte
+                            // so 0b11100000 becomes 0b00000111. It's very
+                            // clever, and stolen completely from here:
+                            // https://stackoverflow.com/a/2602885
+                            byte flipbyte(byte b)
+                            {
+                                b = (byte)((byte)((b & 0xF0) >> 4) | (byte)((b & 0x0F) << 4));
+                                b = (byte)((byte)((b & 0xCC) >> 2) | (byte)((b & 0x33) << 2));
+                                b = (byte)((byte)((b & 0xAA) >> 1) | (byte)((b & 0x55) << 1));
+                                return b;
+                            };
+
+                            // Flip Patterns Horizontally
+                            sprite_pattern_bits_lo = flipbyte(sprite_pattern_bits_lo);
+                            sprite_pattern_bits_hi = flipbyte(sprite_pattern_bits_hi);
+                        }
+
+                        // Finally! We can load the pattern into our sprite shift registers
+                        // ready for rendering on the next scanline
+                        sprite_shifter_pattern_lo[i] = sprite_pattern_bits_lo;
+                        sprite_shifter_pattern_hi[i] = sprite_pattern_bits_hi;
+                    }
+                }
             }
 
             if (scanline == 240)
@@ -1123,10 +1454,9 @@ namespace NESharp.Components
                 }
             }
 
+            // Composition - We now have background & foreground pixel information for this cycle
 
-
-            // Composition - We now have background pixel information for this cycle
-            // At this point we are only interested in background
+            // Background =============================================================
 
             byte bg_pixel = 0x00; // The 2-bit pixel to be rendered
             byte bg_palette = 0x00; // The 3-bit index of the palette the pixel indexes
@@ -1157,13 +1487,136 @@ namespace NESharp.Components
                 bg_palette = (byte)((bg_pal1 << 1) | bg_pal0);
             }
 
+            // Foreground =============================================================
+            byte fg_pixel = 0x00;   // The 2-bit pixel to be rendered
+            byte fg_palette = 0x00; // The 3-bit index of the palette the pixel indexes
+            byte fg_priority = 0x00;// A bit of the sprite attribute indicates if its
+                                    // more important than the background
+            if (mask[maskRenderSprites])
+            {
+                // Iterate through all sprites for this scanline. This is to maintain
+                // sprite priority. As soon as we find a non transparent pixel of
+                // a sprite we can abort
+
+                bSpriteZeroBeingRendered = false;
+
+                for (byte i = 0; i < sprite_count; i++)
+                {
+                    // Scanline cycle has "collided" with sprite, shifters taking over
+                    if (spriteScanline[i].x == 0)
+                    {
+                        // Note Fine X scrolling does not apply to sprites, the game
+                        // should maintain their relationship with the background. So
+                        // we'll just use the MSB of the shifter
+
+                        // Determine the pixel value...
+                        byte fg_pixel_lo = (sprite_shifter_pattern_lo[i] & 0x80) > 0 ? 1 : 0;
+                        byte fg_pixel_hi = (sprite_shifter_pattern_hi[i] & 0x80) > 0 ? 1 : 0;
+                        fg_pixel = (byte)((fg_pixel_hi << 1) | fg_pixel_lo);
+
+                        // Extract the palette from the bottom two bits. Recall
+                        // that foreground palettes are the latter 4 in the 
+                        // palette memory.
+                        fg_palette = (byte)((spriteScanline[i].attribute & 0x03) + 0x04);
+                        fg_priority = (spriteScanline[i].attribute & 0x20) == 0 ? 1 : 0;
+
+                        // If pixel is not transparent, we render it, and dont
+                        // bother checking the rest because the earlier sprites
+                        // in the list are higher priority
+                        if (fg_pixel != 0)
+                        {
+                            if (i == 0) // Is this sprite zero?
+                            {
+                                bSpriteZeroBeingRendered = true;
+                            }
+
+                            break;
+                        }
+                    }
+                }
+            }
+
+            // Now we have a background pixel and a foreground pixel. They need
+            // to be combined. It is possible for sprites to go behind background
+            // tiles that are not "transparent", yet another neat trick of the PPU
+            // that adds complexity for us poor emulator developers...
+
+            byte pixel = 0x00;   // The FINAL Pixel...
+            byte palette = 0x00; // The FINAL Palette...
+
+            if (bg_pixel == 0 && fg_pixel == 0)
+            {
+                // The background pixel is transparent
+                // The foreground pixel is transparent
+                // No winner, draw "background" colour
+                pixel = 0x00;
+                palette = 0x00;
+            }
+            else if (bg_pixel == 0 && fg_pixel > 0)
+            {
+                // The background pixel is transparent
+                // The foreground pixel is visible
+                // Foreground wins!
+                pixel = fg_pixel;
+                palette = fg_palette;
+            }
+            else if (bg_pixel > 0 && fg_pixel == 0)
+            {
+                // The background pixel is visible
+                // The foreground pixel is transparent
+                // Background wins!
+                pixel = bg_pixel;
+                palette = bg_palette;
+            }
+            else if (bg_pixel > 0 && fg_pixel > 0)
+            {
+                // The background pixel is visible
+                // The foreground pixel is visible
+                // Hmmm...
+                if (fg_priority != 0)
+                {
+                    // Foreground cheats its way to victory!
+                    pixel = fg_pixel;
+                    palette = fg_palette;
+                }
+                else
+                {
+                    // Background is considered more important!
+                    pixel = bg_pixel;
+                    palette = bg_palette;
+                }
+
+                // Sprite Zero Hit detection
+                if (bSpriteZeroHitPossible && bSpriteZeroBeingRendered)
+                {
+                    // Sprite zero is a collision between foreground and background
+                    // so they must both be enabled
+                    if (mask[maskRenderBackground] & mask[maskRenderSprites])
+                    {
+                        // The left edge of the screen has specific switches to control
+                        // its appearance. This is used to smooth inconsistencies when
+                        // scrolling (since sprites x coord must be >= 0)
+                        if ((~((mask[maskRenderBackgroundLeft] ? 1 : 0) | (mask[maskRenderSpritesLeft] ? 1 : 0))) != 0)
+                        {
+                            if (cycle >= 9 && cycle < 258)
+                            {
+                                status[statusSpriteZeroHit] = 1;
+                            }
+                        }
+                        else
+                        {
+                            if (cycle >= 1 && cycle < 258)
+                            {
+                                status[statusSpriteZeroHit] = 1;
+                            }
+                        }
+                    }
+                }
+            }
+
             // Now we have a final pixel colour, and a palette for this cycle
             // of the current scanline. Let's at long last, draw that ^&%*er :P
-
-            sprScreen.SetPixel(cycle - 1, scanline, GetColourFromPaletteRam(bg_palette, bg_pixel));
-
-            // Fake some noise for now
-            //sprScreen.SetPixel(cycle - 1, scanline, palScreen[(rand() % 2) ? 0x3F : 0x30]);
+            sprScreen.SetPixel(cycle - 1, scanline, GetColourFromPaletteRam(palette, pixel));
 
             // Advance renderer - it never stops, it's relentless
             cycle++;

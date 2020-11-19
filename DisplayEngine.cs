@@ -148,11 +148,24 @@ namespace NESharp
 
         private void DrawGraphicsData()
         {
+            if (nes.Ppu2C02.OAM != null)
+            {
+                // Draw OAM Contents (first 26 out of 64) ======================================
+                for (int i = 0; i < 26; i++)
+                {
+                    string s = $"{i:X2}: ({nes.Ppu2C02.OAM[i * 4 + 3]}"
+                                    + $", {nes.Ppu2C02.OAM[i * 4 + 0]}) "
+                                    + $"ID: {nes.Ppu2C02.OAM[i * 4 + 1]:X2}"
+                                    + $" AT: {nes.Ppu2C02.OAM[i * 4 + 2]:X2}";
+                    DrawString(516, 72 + i * 10, s);
+                }
+            }
+
             // Draw Palettes & Pattern Tables ==============================================
             const int nSwatchSize = 6;
             for (byte p = 0; p < 8; p++) // For each palette
-            for (byte s = 0; s < 4; s++) // For each index
-                FillRect(516 + p * (nSwatchSize * 5) + s * nSwatchSize, 340, nSwatchSize, nSwatchSize, nes.Ppu2C02.GetColourFromPaletteRam(p, s));
+                for (byte s = 0; s < 4; s++) // For each index
+                    FillRect(516 + p * (nSwatchSize * 5) + s * nSwatchSize, 340, nSwatchSize, nSwatchSize, nes.Ppu2C02.GetColourFromPaletteRam(p, s));
 
             // Draw selection reticule around selected palette
             DrawRect(516 + nSelectedPalette * (nSwatchSize * 5) - 1, 339, (nSwatchSize * 4), nSwatchSize, PixelColor.WHITE);
@@ -165,7 +178,7 @@ namespace NESharp
         public override bool OnUserCreate()
         {
             // Load the cartridge
-            cartridge = new Cartridge("../../../../TestRoms/color_test.nes");
+            cartridge = new Cartridge("../../../../TestRoms/mario.nes");
             if (!cartridge.IsImageValid) { return false; }
 
             // Insert into NES
@@ -258,10 +271,11 @@ namespace NESharp
 
 
             DrawCpu(516, 2);
-            DrawCode(516, 72, 26);
 
             if (nes.Cpu6502.DebugEnabled)
             {
+
+                DrawCode(516, 72, 26);
                 // Draw Ram Page 0x00		
                 DrawRam(2, 2, 0x0000, 16, 16);
                 DrawRam(2, 182, 0x8000, 16, 16);
