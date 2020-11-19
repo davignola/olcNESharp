@@ -256,7 +256,10 @@ namespace NESharp.Components
         public byte IZX()
         {
             byte t = ReadPc();
-            addr_abs = ReadAsAddress((byte)(t + X));
+            ushort lo = CpuRead((byte)(t + X), false);
+            ushort hi = CpuRead((byte)(t + X + 1), false);
+
+            addr_abs = (ushort)((hi << 8) | lo);
             return 0;
         }
 
@@ -1004,7 +1007,8 @@ namespace NESharp.Components
         /// <returns></returns>
         private byte PLP()
         {
-            Status |= (FLAGS6502)(PopStack() & 0xCF);
+            //Status |= (FLAGS6502)(PopStack() & 0xCF);
+            Status = (FLAGS6502)PopStack();
             SetFlag(FLAGS6502.U, true);
             return 0;
         }

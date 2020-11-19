@@ -306,12 +306,12 @@ namespace NESharp.Components
             controlSlaveMode = BitVector32.CreateMask(controlSpriteSize); // unused
             controlEnableNmi = BitVector32.CreateMask(controlSlaveMode);
 
-            loopyCoarseX = BitVector32.CreateSection(5);
-            loopyCoarseY = BitVector32.CreateSection(5);
-            loopyNametableX = BitVector32.CreateSection(1);
-            loopyNametableY = BitVector32.CreateSection(1);
-            loopyFineY = BitVector32.CreateSection(3);
-            loopyUnused = BitVector32.CreateSection(1);
+            loopyCoarseX = BitVector32.CreateSection(31);
+            loopyCoarseY = BitVector32.CreateSection(31, loopyCoarseX);
+            loopyNametableX = BitVector32.CreateSection(1, loopyCoarseY);
+            loopyNametableY = BitVector32.CreateSection(1, loopyNametableX);
+            loopyFineY = BitVector32.CreateSection(7, loopyNametableY);
+            loopyUnused = BitVector32.CreateSection(1, loopyFineY);
 
         }
 
@@ -626,12 +626,11 @@ namespace NESharp.Components
                         tram_addr[loopyCoarseY] = data >> 3;
                         address_latch = 0;
                     }
-
                     break;
                 case 0x0006: // PPU Address
                     if (address_latch == 0)
                     {
-                        // PPU address bus can be accessed by CPU via the address and DATA
+                        // PPU address bus can be accessed by CPU via the ADDR and DATA
                         // registers. The fisrt write to this register latches the high byte
                         // of the address, the second is the low byte. Note the writes
                         // are stored in the tram register...
@@ -648,7 +647,6 @@ namespace NESharp.Components
                         vram_addr = tram_addr;
                         address_latch = 0;
                     }
-
                     break;
                 case 0x0007: // PPU Data
                     PpuWrite((ushort)vram_addr.Data, data);
@@ -951,13 +949,10 @@ namespace NESharp.Components
                 // palette is being used for the current 8 pixels and the next 8 pixels, and 
                 // "inflate" them to 8 bit words.
                 bg_shifter_attrib_lo = (ushort)((bg_shifter_attrib_lo & 0xFF00) |
-                                                 (((bg_next_tile_attrib & 0b01) != 0) ? 0xFF : 0x00));
+                                                ((bg_next_tile_attrib & 0b01) != 0 ? 0xFF : 0x00));
                 bg_shifter_attrib_hi = (ushort)((bg_shifter_attrib_hi & 0xFF00) |
-                                                 (((bg_next_tile_attrib & 0b10) != 0) ? 0xFF : 0x00));
+                                                ((bg_next_tile_attrib & 0b10) != 0 ? 0xFF : 0x00));
             }
-
-            ;
-
 
             // ==============================================================================
             // Every cycle the shifters storing pattern and attribute information shift
@@ -977,7 +972,6 @@ namespace NESharp.Components
                     bg_shifter_attrib_hi <<= 1;
                 }
 
-
                 if (mask[maskRenderSprites] && cycle >= 1 && cycle < 258)
                 {
                     for (int i = 0; i < sprite_count; i++)
@@ -994,6 +988,8 @@ namespace NESharp.Components
                     }
                 }
             }
+
+
 
             // All but 1 of the secanlines is visible to the user. The pre-render scanline
             // at -1, is used to configure the "shifters" for the first visible scanline, 0.
@@ -1108,21 +1104,21 @@ namespace NESharp.Components
                             // Reconstruct the 12 bit loopy address into an offset into the
                             // attribute memory
 
-                            // "(vram_addr[loopyCoarseX] >> 2)"        : integer divide coarse x by 4, 
+                            // "(vram_addr.coarse_x >> 2)"        : integer divide coarse x by 4, 
                             //                                      from 5 bits to 3 bits
-                            // "((vram_addr[loopyCoarseY] >> 2) << 3)" : integer divide coarse y by 4, 
+                            // "((vram_addr.coarse_y >> 2) << 3)" : integer divide coarse y by 4, 
                             //                                      from 5 bits to 3 bits,
                             //                                      shift to make room for coarse x
 
                             // Result so far: YX00 00yy yxxx
 
                             // All attribute memory begins at 0x03C0 within a nametable, so OR with
-                            // result to select target nametable, and attribute byte offset. Finally        
+                            // result to select target nametable, and attribute byte offset. Finally
                             // OR with 0x2000 to offset into nametable address space on PPU bus.				
                             bg_next_tile_attrib = PpuRead((ushort)(0x23C0 | (vram_addr[loopyNametableY] << 11)
-                                                                           | (vram_addr[loopyNametableX] << 10)
-                                                                           | ((vram_addr[loopyCoarseY] >> 2) << 3)
-                                                                           | (vram_addr[loopyCoarseX] >> 2)));
+                                                                          | (vram_addr[loopyNametableX] << 10)
+                                                                          | ((vram_addr[loopyCoarseY] >> 2) << 3)
+                                                                          | (vram_addr[loopyCoarseX] >> 2)));
 
                             // Right we've read the correct attribute byte for a specified address,
                             // but the byte itself is broken down further into the 2x2 tile groups
@@ -1166,23 +1162,23 @@ namespace NESharp.Components
                             // "(control.pattern_background << 12)"  : the pattern memory selector 
                             //                                         from control register, either 0K
                             //                                         or 4K offset
-                            // "((ushort)bg_next_tile_id << 4)"    : the tile id multiplied by 16, as
+                            // "((uint16_t)bg_next_tile_id << 4)"    : the tile id multiplied by 16, as
                             //                                         2 lots of 8 rows of 8 bit pixels
-                            // "(vram_addr[loopyFineY])"                  : Offset into which row based on
+                            // "(vram_addr.fine_y)"                  : Offset into which row based on
                             //                                         vertical scroll offset
                             // "+ 0"                                 : Mental clarity for plane offset
                             // Note: No PPU address bus offset required as it starts at 0x0000
                             bg_next_tile_lsb = PpuRead((ushort)(((control[controlPatternBackground] ? 1 : 0) << 12)
-                                                                 + (bg_next_tile_id << 4)
-                                                                 + (vram_addr[loopyFineY]) + 0));
+                                                                + (bg_next_tile_id << 4)
+                                                                + (vram_addr[loopyFineY]) + 0));
 
                             break;
                         case 6:
                             // Fetch the next background tile MSB bit plane from the pattern memory
                             // This is the same as above, but has a +8 offset to select the next bit plane
                             bg_next_tile_msb = PpuRead((ushort)(((control[controlPatternBackground] ? 1 : 0) << 12)
-                                                                 + (bg_next_tile_id << 4)
-                                                                 + (vram_addr[loopyFineY]) + 8));
+                                                                + (bg_next_tile_id << 4)
+                                                                + (vram_addr[loopyFineY]) + 8));
                             break;
                         case 7:
                             // Increment the background tile "pointer" to the next tile horizontally
@@ -1457,8 +1453,7 @@ namespace NESharp.Components
             // Composition - We now have background & foreground pixel information for this cycle
 
             // Background =============================================================
-
-            byte bg_pixel = 0x00; // The 2-bit pixel to be rendered
+            byte bg_pixel = 0x00;   // The 2-bit pixel to be rendered
             byte bg_palette = 0x00; // The 3-bit index of the palette the pixel indexes
 
             // We only render backgrounds if the PPU is enabled to do so. Note if 

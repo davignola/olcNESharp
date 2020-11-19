@@ -178,7 +178,7 @@ namespace NESharp
         public override bool OnUserCreate()
         {
             // Load the cartridge
-            cartridge = new Cartridge("../../../../TestRoms/mario.nes");
+            cartridge = new Cartridge("../../../../TestRoms/nestest.nes");
             if (!cartridge.IsImageValid) { return false; }
 
             // Insert into NES
@@ -213,6 +213,8 @@ namespace NESharp
                 breakFrameCycle = false;
             }
             if (GetKey(KeyManaged.R).bPressed()) nes.Reset();
+            // Hard reset (Power cycle)
+            if (GetKey(KeyManaged.H).bPressed()) nes.Reset(true);
             if (GetKey(KeyManaged.P).bPressed())
             {
                 nSelectedPalette++;
@@ -232,6 +234,7 @@ namespace NESharp
                     breakFrameCycle = true;
                 };
             }
+
 
             if (emulationRun)
             {
