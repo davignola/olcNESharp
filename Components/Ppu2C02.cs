@@ -84,7 +84,9 @@ namespace NESharp.Components
         // Helper section
         // BitVector internal data is realonly and can't creale a mask for the whole 32bit
         // No data structure are greater than 16 bit anyway so this is enough
-        private BitVector32.Section allFirst16 = BitVector32.CreateSection(short.MaxValue);
+        // This is actually a bug though... the bigest mask can only be 15bit >:@
+        // Good thing bit 16 is never used anyway...
+        private BitVector32.Section allFirst15 = BitVector32.CreateSection(short.MaxValue); // Should have been ushort.MaxValue but Section.Mask is short type... and no ushort.MinVlue doesn't work !
 
         // Status sections
         private BitVector32.Section statusUnused;
@@ -119,7 +121,7 @@ namespace NESharp.Components
         private BitVector32.Section loopyNametableX;
         private BitVector32.Section loopyNametableY;
         private BitVector32.Section loopyFineY;
-        private BitVector32.Section loopyUnused;
+
 
         #endregion
 
@@ -311,7 +313,6 @@ namespace NESharp.Components
             loopyNametableX = BitVector32.CreateSection(1, loopyCoarseY);
             loopyNametableY = BitVector32.CreateSection(1, loopyNametableX);
             loopyFineY = BitVector32.CreateSection(7, loopyNametableY);
-            loopyUnused = BitVector32.CreateSection(1, loopyFineY);
 
         }
 
@@ -581,7 +582,7 @@ namespace NESharp.Components
                         // If set to vertical mode, the increment is 32, so it skips
                         // one whole nametable row; in horizontal mode it just increments
                         // by 1, moving to the next column
-                        vram_addr[allFirst16] += control[controlIncrementMode] ? 32 : 1;
+                        vram_addr[allFirst15] += control[controlIncrementMode] ? 32 : 1;
                         break;
                 }
             }
@@ -594,12 +595,12 @@ namespace NESharp.Components
             switch (address)
             {
                 case 0x0000: // Control
-                    control[allFirst16] = data;
+                    control[allFirst15] = data;
                     tram_addr[loopyNametableX] = control[controlNametableX] ? 1 : 0;
                     tram_addr[loopyNametableY] = control[controlNametableY] ? 1 : 0;
                     break;
                 case 0x0001: // Mask
-                    mask[allFirst16] = data;
+                    mask[allFirst15] = data;
                     break;
                 case 0x0002: // Status
                     break;
@@ -634,7 +635,7 @@ namespace NESharp.Components
                         // registers. The fisrt write to this register latches the high byte
                         // of the address, the second is the low byte. Note the writes
                         // are stored in the tram register...
-                        tram_addr[allFirst16] = (ushort)((data & 0x3F) << 8) | (tram_addr.Data & 0x00FF);
+                        tram_addr[allFirst15] = (ushort)((data & 0x3F) << 8) | (tram_addr.Data & 0x00FF);
                         address_latch = 1;
                     }
                     else
@@ -643,7 +644,7 @@ namespace NESharp.Components
                         // buffer is updated. Writing to the PPU is unwise during rendering
                         // as the PPU will maintam the vram address automatically whilst
                         // rendering the scanline position.
-                        tram_addr[allFirst16] = (tram_addr.Data & 0xFF00) | data;
+                        tram_addr[allFirst15] = (tram_addr.Data & 0xFF00) | data;
                         vram_addr = tram_addr;
                         address_latch = 0;
                     }
@@ -655,7 +656,7 @@ namespace NESharp.Components
                     // If set to vertical mode, the increment is 32, so it skips
                     // one whole nametable row; in horizontal mode it just increments
                     // by 1, moving to the next column
-                    vram_addr[allFirst16] += control[controlIncrementMode] ? 32 : 1;
+                    vram_addr[allFirst15] += control[controlIncrementMode] ? 32 : 1;
                     break;
             }
         }
@@ -788,11 +789,11 @@ namespace NESharp.Components
             bg_shifter_pattern_hi = 0x0000;
             bg_shifter_attrib_lo = 0x0000;
             bg_shifter_attrib_hi = 0x0000;
-            status[allFirst16] = 0x00;
-            mask[allFirst16] = 0x00;
-            control[allFirst16] = 0x00;
-            vram_addr[allFirst16] = 0x0000;
-            tram_addr[allFirst16] = 0x0000;
+            status[allFirst15] = 0x00;
+            mask[allFirst15] = 0x00;
+            control[allFirst15] = 0x00;
+            vram_addr[allFirst15] = 0x0000;
+            tram_addr[allFirst15] = 0x0000;
         }
 
         /// <summary>
@@ -1230,7 +1231,7 @@ namespace NESharp.Components
 
                     // Firstly, clear out the sprite memory. This memory is used to store the
                     // sprites to be rendered. It is not the OAM.
-                    for (var i = 0; i < spriteScanline.Length; i++) { spriteScanline[i].entry = uint.MaxValue; }
+                    Array.Clear(spriteScanline,0, spriteScanline.Length);
 
 
                     // The NES supports a maximum number of sprites per scanline. Nominally
