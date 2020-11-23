@@ -16,7 +16,18 @@
   </ItemGroup>
 
   <ItemGroup>
-    <ProjectReference Include="..\olcPixelGameEngine\PixelGameEngineManaged\olcPixelgameEngineManaged.vcxproj" />
+    <Reference Include="olcPixelgameEngineManaged">
+      <HintPath>olcPixelgameEngineManaged.dll</HintPath>
+    </Reference>
+  </ItemGroup>
+
+  <ItemGroup>
+    <None Update="Ijwhost.dll">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
+    <None Update="olcPixelgameEngineManaged.pdb">
+      <CopyToOutputDirectory>Always</CopyToOutputDirectory>
+    </None>
   </ItemGroup>
 
 </Project>
