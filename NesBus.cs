@@ -128,7 +128,7 @@ namespace NESharp
 
             Cartridge.Reset();
             Cpu6502.Reset();
-            Ppu2C02.Reset();
+            Ppu2C02.Reset(hardReset);
             SystemClockCounter = 0;
             dma_page = 0x00;
             dma_addr = 0x00;
@@ -214,6 +214,13 @@ namespace NESharp
                 Cpu6502.NMI();
             }
 
+            // Check if cartridge is requesting IRQ
+            if (Cartridge.GetMapper().IrqState)
+            {
+                Cartridge.GetMapper().IrqClear();
+                Cpu6502.IRQ();
+            }
+            
             SystemClockCounter++;
         }
 

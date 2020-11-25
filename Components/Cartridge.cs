@@ -100,6 +100,7 @@ namespace NESharp.Components
 
         public enum MIRROR : byte
         {
+            HARDWARE,
             HORIZONTAL,
             VERTICAL,
             ONESCREEN_LO,
@@ -108,7 +109,7 @@ namespace NESharp.Components
 
 
         public HeaderINES Header;
-        public MIRROR Mirror = MIRROR.HORIZONTAL;
+        private MIRROR HwMirror = MIRROR.HORIZONTAL;
 
         public bool IsImageValid { get; set; } = false;
 
@@ -148,10 +149,11 @@ namespace NESharp.Components
 
                     // Determine Mapper ID
                     nMapperID = (byte)(((Header.Mapper2 >> 4) << 4) | (Header.Mapper1 >> 4));
-                    Mirror = (Header.Mapper1 & 0x01) != 0 ? MIRROR.VERTICAL : MIRROR.HORIZONTAL;
+                    HwMirror = (Header.Mapper1 & 0x01) != 0 ? MIRROR.VERTICAL : MIRROR.HORIZONTAL;
 
                     // "Discover" File Format
                     byte nFileType = 1;
+                    if ((Header.Mapper2 & 0x0C) == 0x08) nFileType = 2;
 
                     if (nFileType == 0)
                     {
@@ -165,25 +167,46 @@ namespace NESharp.Components
                         fileReader.Read(vPRGMemory, 0, vPRGMemory.Length);
 
                         nCHRBanks = Header.Chr_rom_chunks;
-                        vCHRMemory = new byte[nCHRBanks * 8192];
+                        if (nCHRBanks == 0)
+                        {
+                            // Create CHR RAM
+                            vCHRMemory = new byte[ 8192];
+                        }
+                        else
+                        {
+                            // Allocate for ROM
+                            vCHRMemory = new byte[nCHRBanks * 8192];
+                        }
                         fileReader.Read(vCHRMemory, 0, vCHRMemory.Length);
                     }
 
                     if (nFileType == 2)
                     {
+                        nPRGBanks = (byte)(((Header.Prg_ram_size & 0x07) << 8) | Header.Prg_rom_chunks);
+                        vPRGMemory = new byte[nPRGBanks * 16384];
+                        fileReader.Read(vPRGMemory, 0, vPRGMemory.Length);
 
+                        nCHRBanks = (byte)(((Header.Prg_ram_size & 0x38) << 8) | Header.Chr_rom_chunks);
+                        vCHRMemory = new byte[nCHRBanks * 8192];
+                        fileReader.Read(vCHRMemory, 0, vCHRMemory.Length);
                     }
 
                     // Load appropriate mapper
                     switch (nMapperID)
                     {
                         case 0: pMapper = new Mapper000(nPRGBanks, nCHRBanks); break;
+                        case 1: pMapper = new Mapper001(nPRGBanks, nCHRBanks); break;
+                        case 2: pMapper = new Mapper002(nPRGBanks, nCHRBanks); break;
+                        case 3: pMapper = new Mapper003(nPRGBanks, nCHRBanks); break;
+                        case 4: pMapper = new Mapper004(nPRGBanks,nCHRBanks); break;
+                        case 66: pMapper = new Mapper066(nPRGBanks, nCHRBanks); break;
+                        default: throw new Exception($"Mapper {nMapperID} not implemented");
                     }
 
                     IsImageValid = true;
                 }
             }
-            catch (Exception ex)
+            catch (Exception)
             {
                 throw;
             }
@@ -193,9 +216,18 @@ namespace NESharp.Components
         public bool CpuRead(ushort address, ref byte data)
         {
             uint mappedAddress = 0;
-            if (pMapper.CpuMapRead(address, ref mappedAddress))
+            if (pMapper.CpuMapRead(address, ref mappedAddress, ref data))
             {
-                data = vPRGMemory[mappedAddress];
+                if (mappedAddress == 0xFFFFFFFF)
+                {
+                    // Mapper has actually set the data value, for example cartridge based RAM
+                    return true;
+                }
+                else
+                {
+                    // Mapper has produced an offset into cartridge bank memory
+                    data = vPRGMemory[mappedAddress];
+                }
                 return true;
             }
 
@@ -204,9 +236,18 @@ namespace NESharp.Components
         public bool CpuWrite(ushort address, byte data)
         {
             uint mappedAddress = 0;
-            if (pMapper.CpuMapWrite(address, ref mappedAddress))
+            if (pMapper.CpuMapWrite(address, ref mappedAddress, data))
             {
-                vPRGMemory[mappedAddress] = data;
+                if (mappedAddress == 0xFFFFFFFF)
+                {
+                    // Mapper has actually set the data value, for example cartridge based RAM
+                    return true;
+                }
+                else
+                {
+                    // Mapper has produced an offset into cartridge bank memory
+                    vPRGMemory[mappedAddress] = data;
+                }
                 return true;
             }
 
@@ -240,6 +281,28 @@ namespace NESharp.Components
             // Note: This does not reset the ROM contents,
             // but does reset the mapper.
             pMapper?.Reset();
+        }
+
+        public MIRROR GetMirror()
+        {
+            MIRROR m = pMapper.Mirror;
+            if (m == MIRROR.HARDWARE)
+            {
+                // GetMirror configuration was defined
+                // in hardware via soldering
+                return HwMirror;
+            }
+            else
+            {
+                // GetMirror configuration can be
+                // dynamically set via mapper
+                return m;
+            }
+        }
+
+        public IMapper GetMapper()
+        {
+            return pMapper;
         }
     }
 }

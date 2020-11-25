@@ -187,7 +187,7 @@ namespace NESharp
             // Extract dissassembly
             mapAsm = nes.Cpu6502.Disassemble(0x8000, 0xFFFF);
 
-            nes.Cpu6502.Reset();
+            nes.Reset();
             return true;
         }
 

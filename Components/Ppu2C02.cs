@@ -148,6 +148,7 @@ namespace NESharp.Components
         // Pixel "dot" position information
         private short scanline = 0;
         private short cycle = 0;
+        private bool odd_frame = false;
 
         // Background rendering =========================================
         byte bg_next_tile_id = 0x00;
@@ -204,6 +205,7 @@ namespace NESharp.Components
         public IIODevice Bus { get; private set; }
         public bool HasCompletedFrame { get; set; } = false;
         public bool Nmi { get; set; }
+        public bool scanline_trigger = false;
 
         public Ppu2C02()
         {
@@ -314,21 +316,14 @@ namespace NESharp.Components
             loopyNametableY = BitVector32.CreateSection(1, loopyNametableX);
             loopyFineY = BitVector32.CreateSection(7, loopyNametableY);
 
+
+            // Create an handle to the array for direct memory access
+            // The handle last the life cycle of the program as we keep the same array instance
+            // The pinned type prevents GC from moving the array pointer around.
+            var handle = GCHandle.Alloc(OAM, GCHandleType.Pinned);
+            pOAM = handle.AddrOfPinnedObject();
         }
 
-        private void UpdateOAMPtr()
-        {
-            // Get handle of the OAM array
-            var handle = GCHandle.Alloc(OAM, GCHandleType.Pinned);
-            try
-            {
-                pOAM = handle.AddrOfPinnedObject();
-            }
-            finally
-            {
-                handle.Free();
-            }
-        }
 
         /// <summary>
         /// Helper method to get part of a byte array interpreted as a struct
@@ -440,7 +435,7 @@ namespace NESharp.Components
                         {
                             // We can get the index value by simply adding the bits together
                             // but we're only interested in the lsb of the row words because...
-                            byte pixel = (byte)((tile_lsb & 0x01) << 1 | (tile_msb & 0x01));
+                            byte pixel = (byte)((tile_msb & 0x01) << 1 | (tile_lsb & 0x01));
 
                             // ...we will shift the row words 1 bit right for each column of
                             // the character.
@@ -680,7 +675,7 @@ namespace NESharp.Components
             {
                 address &= 0x0FFF;
 
-                if (cartridge.Mirror == Cartridge.MIRROR.VERTICAL)
+                if (cartridge.GetMirror() == Cartridge.MIRROR.VERTICAL)
                 {
                     // Vertical
                     if (address >= 0x0000 && address <= 0x03FF)
@@ -692,7 +687,7 @@ namespace NESharp.Components
                     if (address >= 0x0C00 && address <= 0x0FFF)
                         data = tblName[1][address & 0x03FF];
                 }
-                else if (cartridge.Mirror == Cartridge.MIRROR.HORIZONTAL)
+                else if (cartridge.GetMirror() == Cartridge.MIRROR.HORIZONTAL)
                 {
                     // Horizontal
                     if (address >= 0x0000 && address <= 0x03FF)
@@ -733,7 +728,7 @@ namespace NESharp.Components
             else if (address >= 0x2000 && address <= 0x3EFF)
             {
                 address &= 0x0FFF;
-                if (cartridge.Mirror == Cartridge.MIRROR.VERTICAL)
+                if (cartridge.GetMirror() == Cartridge.MIRROR.VERTICAL)
                 {
                     // Vertical
                     if (address >= 0x0000 && address <= 0x03FF)
@@ -745,7 +740,7 @@ namespace NESharp.Components
                     if (address >= 0x0C00 && address <= 0x0FFF)
                         tblName[1][address & 0x03FF] = data;
                 }
-                else if (cartridge.Mirror == Cartridge.MIRROR.HORIZONTAL)
+                else if (cartridge.GetMirror() == Cartridge.MIRROR.HORIZONTAL)
                 {
                     // Horizontal
                     if (address >= 0x0000 && address <= 0x03FF)
@@ -774,8 +769,16 @@ namespace NESharp.Components
             this.cartridge = cartridge;
         }
 
-        public void Reset()
+        public void Reset(bool hardReset = false)
         {
+            if (hardReset)
+            {
+                // Reset OAM
+                Array.Clear(OAM,0x00,OAM.Length);
+                Array.Clear(spriteScanline, 0x00, spriteScanline.Length);
+            }
+
+
             fine_x = 0x00;
             address_latch = 0x00;
             ppu_data_buffer = 0x00;
@@ -794,6 +797,8 @@ namespace NESharp.Components
             control[allFirst15] = 0x00;
             vram_addr[allFirst15] = 0x0000;
             tram_addr[allFirst15] = 0x0000;
+            scanline_trigger = false;
+            odd_frame = false;
         }
 
         /// <summary>
@@ -950,9 +955,9 @@ namespace NESharp.Components
                 // palette is being used for the current 8 pixels and the next 8 pixels, and 
                 // "inflate" them to 8 bit words.
                 bg_shifter_attrib_lo = (ushort)((bg_shifter_attrib_lo & 0xFF00) |
-                                                ((bg_next_tile_attrib & 0b01) != 0 ? 0xFF : 0x00));
+                                                 ((bg_next_tile_attrib & 0b01) != 0 ? 0xFF : 0x00));
                 bg_shifter_attrib_hi = (ushort)((bg_shifter_attrib_hi & 0xFF00) |
-                                                ((bg_next_tile_attrib & 0b10) != 0 ? 0xFF : 0x00));
+                                                 ((bg_next_tile_attrib & 0b10) != 0 ? 0xFF : 0x00));
             }
 
             // ==============================================================================
@@ -998,11 +1003,8 @@ namespace NESharp.Components
             {
                 // Background Rendering ======================================================
 
-                if (scanline == 0 && cycle == 0)
+                if (scanline == 0 && cycle == 0 && odd_frame && (mask[maskRenderBackground] || mask[maskRenderSprites]))
                 {
-                    // Update une OAM pointer GC somethime move the array around early on
-                    UpdateOAMPtr();
-
                     // "Odd Frame" cycle skip
                     cycle = 1;
                 }
@@ -1117,9 +1119,9 @@ namespace NESharp.Components
                             // result to select target nametable, and attribute byte offset. Finally
                             // OR with 0x2000 to offset into nametable address space on PPU bus.				
                             bg_next_tile_attrib = PpuRead((ushort)(0x23C0 | (vram_addr[loopyNametableY] << 11)
-                                                                          | (vram_addr[loopyNametableX] << 10)
-                                                                          | ((vram_addr[loopyCoarseY] >> 2) << 3)
-                                                                          | (vram_addr[loopyCoarseX] >> 2)));
+                                                                           | (vram_addr[loopyNametableX] << 10)
+                                                                           | ((vram_addr[loopyCoarseY] >> 2) << 3)
+                                                                           | (vram_addr[loopyCoarseX] >> 2)));
 
                             // Right we've read the correct attribute byte for a specified address,
                             // but the byte itself is broken down further into the 2x2 tile groups
@@ -1170,16 +1172,16 @@ namespace NESharp.Components
                             // "+ 0"                                 : Mental clarity for plane offset
                             // Note: No PPU address bus offset required as it starts at 0x0000
                             bg_next_tile_lsb = PpuRead((ushort)(((control[controlPatternBackground] ? 1 : 0) << 12)
-                                                                + (bg_next_tile_id << 4)
-                                                                + (vram_addr[loopyFineY]) + 0));
+                                                                 + (bg_next_tile_id << 4)
+                                                                 + (vram_addr[loopyFineY]) + 0));
 
                             break;
                         case 6:
                             // Fetch the next background tile MSB bit plane from the pattern memory
                             // This is the same as above, but has a +8 offset to select the next bit plane
                             bg_next_tile_msb = PpuRead((ushort)(((control[controlPatternBackground] ? 1 : 0) << 12)
-                                                                + (bg_next_tile_id << 4)
-                                                                + (vram_addr[loopyFineY]) + 8));
+                                                                 + (bg_next_tile_id << 4)
+                                                                 + (vram_addr[loopyFineY]) + 8));
                             break;
                         case 7:
                             // Increment the background tile "pointer" to the next tile horizontally
@@ -1231,7 +1233,7 @@ namespace NESharp.Components
 
                     // Firstly, clear out the sprite memory. This memory is used to store the
                     // sprites to be rendered. It is not the OAM.
-                    Array.Clear(spriteScanline,0, spriteScanline.Length);
+                    Array.Clear(spriteScanline, 0, spriteScanline.Length);
 
 
                     // The NES supports a maximum number of sprites per scanline. Nominally
@@ -1267,7 +1269,7 @@ namespace NESharp.Components
                         // depending on the current "sprite height mode"
                         // FLAGGED
 
-                        if (diff >= 0 && diff < (control[controlSpriteSize] ? 16 : 8))
+                        if (diff >= 0 && diff < (control[controlSpriteSize] ? 16 : 8) && sprite_count < 8)
                         {
                             // Sprite is visible, so copy the attribute entry over to our
                             // scanline sprite cache. Ive added < 8 here to guard the array
@@ -1281,16 +1283,18 @@ namespace NESharp.Components
                                     // sprite zero hit when drawn
                                     bSpriteZeroHitPossible = true;
                                 }
+
                                 spriteScanline[sprite_count] = GetObjectAttribute(nOAMEntry);
-                                sprite_count++;
                             }
+
+                            sprite_count++;
                         }
 
                         nOAMEntry++;
                     } // End of sprite evaluation for next scanline
 
                     // Set sprite overflow flag
-                    status[statusSpriteOverflow] = (sprite_count > 8) ? 1 : 0;
+                    status[statusSpriteOverflow] = (sprite_count >= 8) ? 1 : 0;
 
                     // Now we have an array of the 8 visible sprites for the next scanline. By 
                     // the nature of this search, they are also ranked in priority, because
@@ -1326,18 +1330,18 @@ namespace NESharp.Components
                             {
                                 // Sprite is NOT flipped vertically, i.e. normal    
                                 sprite_pattern_addr_lo = (ushort)(
-                                  (control[controlPatternSprite] ? 1 : 0 << 12)  // Which Pattern Table? 0KB or 4KB offset
-                                | (spriteScanline[i].id << 4)  // Which Cell? Tile ID * 16 (16 bytes per tile)
-                                | (scanline - spriteScanline[i].y)); // Which Row in cell? (0->7)
+                                    (control[controlPatternSprite] ? 1 : 0 << 12)  // Which Pattern Table? 0KB or 4KB offset
+                                    | (spriteScanline[i].id << 4)  // Which Cell? Tile ID * 16 (16 bytes per tile)
+                                    | (scanline - spriteScanline[i].y)); // Which Row in cell? (0->7)
 
                             }
                             else
                             {
                                 // Sprite is flipped vertically, i.e. upside down
                                 sprite_pattern_addr_lo = (ushort)(
-                                  (control[controlPatternSprite] ? 1 : 0 << 12)  // Which Pattern Table? 0KB or 4KB offset
-                                | (spriteScanline[i].id << 4)  // Which Cell? Tile ID * 16 (16 bytes per tile)
-                                | (7 - (scanline - spriteScanline[i].y))); // Which Row in cell? (7->0)
+                                    (control[controlPatternSprite] ? 1 : 0 << 12)  // Which Pattern Table? 0KB or 4KB offset
+                                    | (spriteScanline[i].id << 4)  // Which Cell? Tile ID * 16 (16 bytes per tile)
+                                    | (7 - (scanline - spriteScanline[i].y))); // Which Row in cell? (7->0)
                             }
 
                         }
@@ -1351,17 +1355,17 @@ namespace NESharp.Components
                                 {
                                     // Reading Top half Tile
                                     sprite_pattern_addr_lo = (ushort)(
-                                      ((spriteScanline[i].id & 0x01) << 12)  // Which Pattern Table? 0KB or 4KB offset
-                                    | ((spriteScanline[i].id & 0xFE) << 4)  // Which Cell? Tile ID * 16 (16 bytes per tile)
-                                    | ((scanline - spriteScanline[i].y) & 0x07)); // Which Row in cell? (0->7)
+                                        ((spriteScanline[i].id & 0x01) << 12)  // Which Pattern Table? 0KB or 4KB offset
+                                        | ((spriteScanline[i].id & 0xFE) << 4)  // Which Cell? Tile ID * 16 (16 bytes per tile)
+                                        | ((scanline - spriteScanline[i].y) & 0x07)); // Which Row in cell? (0->7)
                                 }
                                 else
                                 {
                                     // Reading Bottom Half Tile
                                     sprite_pattern_addr_lo = (ushort)(
-                                      ((spriteScanline[i].id & 0x01) << 12)  // Which Pattern Table? 0KB or 4KB offset
-                                    | (((spriteScanline[i].id & 0xFE) + 1) << 4)  // Which Cell? Tile ID * 16 (16 bytes per tile)
-                                    | ((scanline - spriteScanline[i].y) & 0x07)); // Which Row in cell? (0->7)
+                                        ((spriteScanline[i].id & 0x01) << 12)  // Which Pattern Table? 0KB or 4KB offset
+                                        | (((spriteScanline[i].id & 0xFE) + 1) << 4)  // Which Cell? Tile ID * 16 (16 bytes per tile)
+                                        | ((scanline - spriteScanline[i].y) & 0x07)); // Which Row in cell? (0->7)
                                 }
                             }
                             else
@@ -1371,17 +1375,17 @@ namespace NESharp.Components
                                 {
                                     // Reading Top half Tile
                                     sprite_pattern_addr_lo = (ushort)(
-                                      ((spriteScanline[i].id & 0x01) << 12)    // Which Pattern Table? 0KB or 4KB offset
-                                    | (((spriteScanline[i].id & 0xFE) + 1) << 4)    // Which Cell? Tile ID * 16 (16 bytes per tile)
-                                    | (7 - (scanline - spriteScanline[i].y) & 0x07)); // Which Row in cell? (0->7)
+                                        ((spriteScanline[i].id & 0x01) << 12)    // Which Pattern Table? 0KB or 4KB offset
+                                        | (((spriteScanline[i].id & 0xFE) + 1) << 4)    // Which Cell? Tile ID * 16 (16 bytes per tile)
+                                        | (7 - (scanline - spriteScanline[i].y) & 0x07)); // Which Row in cell? (0->7)
                                 }
                                 else
                                 {
                                     // Reading Bottom Half Tile
                                     sprite_pattern_addr_lo = (ushort)(
-                                      ((spriteScanline[i].id & 0x01) << 12)    // Which Pattern Table? 0KB or 4KB offset
-                                    | ((spriteScanline[i].id & 0xFE) << 4)    // Which Cell? Tile ID * 16 (16 bytes per tile)
-                                    | (7 - (scanline - spriteScanline[i].y) & 0x07)); // Which Row in cell? (0->7)
+                                        ((spriteScanline[i].id & 0x01) << 12)    // Which Pattern Table? 0KB or 4KB offset
+                                        | ((spriteScanline[i].id & 0xFE) << 4)    // Which Cell? Tile ID * 16 (16 bytes per tile)
+                                        | (7 - (scanline - spriteScanline[i].y) & 0x07)); // Which Row in cell? (0->7)
                                 }
                             }
                         }
@@ -1463,70 +1467,75 @@ namespace NESharp.Components
             // the current background colour in effect
             if (mask[maskRenderBackground])
             {
-                // Handle Pixel Selection by selecting the relevant bit
-                // depending upon fine x scolling. This has the effect of
-                // offsetting ALL background rendering by a set number
-                // of pixels, permitting smooth scrolling
-                ushort bit_mux = (ushort)(0x8000 >> fine_x);
+                if (mask[maskRenderBackgroundLeft] || (cycle >= 9))
+                {
+                    // Handle Pixel Selection by selecting the relevant bit
+                    // depending upon fine x scolling. This has the effect of
+                    // offsetting ALL background rendering by a set number
+                    // of pixels, permitting smooth scrolling
+                    ushort bit_mux = (ushort)(0x8000 >> fine_x);
 
-                // Select Plane pixels by extracting from the shifter 
-                // at the required location. 
-                byte p0_pixel = (bg_shifter_pattern_lo & bit_mux) > 0 ? 1 : 0;
-                byte p1_pixel = (bg_shifter_pattern_hi & bit_mux) > 0 ? 1 : 0;
+                    // Select Plane pixels by extracting from the shifter 
+                    // at the required location. 
+                    byte p0_pixel = (bg_shifter_pattern_lo & bit_mux) > 0 ? 1 : 0;
+                    byte p1_pixel = (bg_shifter_pattern_hi & bit_mux) > 0 ? 1 : 0;
 
-                // Combine to form pixel index
-                bg_pixel = (byte)((p1_pixel << 1) | p0_pixel);
+                    // Combine to form pixel index
+                    bg_pixel = (byte)((p1_pixel << 1) | p0_pixel);
 
-                // Get palette
-                byte bg_pal0 = (bg_shifter_attrib_lo & bit_mux) > 0 ? 1 : 0;
-                byte bg_pal1 = (bg_shifter_attrib_hi & bit_mux) > 0 ? 1 : 0;
-                bg_palette = (byte)((bg_pal1 << 1) | bg_pal0);
+                    // Get palette
+                    byte bg_pal0 = (bg_shifter_attrib_lo & bit_mux) > 0 ? 1 : 0;
+                    byte bg_pal1 = (bg_shifter_attrib_hi & bit_mux) > 0 ? 1 : 0;
+                    bg_palette = (byte)((bg_pal1 << 1) | bg_pal0);
+                }
             }
 
             // Foreground =============================================================
             byte fg_pixel = 0x00;   // The 2-bit pixel to be rendered
             byte fg_palette = 0x00; // The 3-bit index of the palette the pixel indexes
             byte fg_priority = 0x00;// A bit of the sprite attribute indicates if its
-                                    // more important than the background
+            // more important than the background
             if (mask[maskRenderSprites])
             {
                 // Iterate through all sprites for this scanline. This is to maintain
                 // sprite priority. As soon as we find a non transparent pixel of
                 // a sprite we can abort
-
-                bSpriteZeroBeingRendered = false;
-
-                for (byte i = 0; i < sprite_count; i++)
+                if (mask[maskRenderSpritesLeft] || (cycle >= 9))
                 {
-                    // Scanline cycle has "collided" with sprite, shifters taking over
-                    if (spriteScanline[i].x == 0)
+                    bSpriteZeroBeingRendered = false;
+
+                    for (byte i = 0; i < sprite_count; i++)
                     {
-                        // Note Fine X scrolling does not apply to sprites, the game
-                        // should maintain their relationship with the background. So
-                        // we'll just use the MSB of the shifter
-
-                        // Determine the pixel value...
-                        byte fg_pixel_lo = (sprite_shifter_pattern_lo[i] & 0x80) > 0 ? 1 : 0;
-                        byte fg_pixel_hi = (sprite_shifter_pattern_hi[i] & 0x80) > 0 ? 1 : 0;
-                        fg_pixel = (byte)((fg_pixel_hi << 1) | fg_pixel_lo);
-
-                        // Extract the palette from the bottom two bits. Recall
-                        // that foreground palettes are the latter 4 in the 
-                        // palette memory.
-                        fg_palette = (byte)((spriteScanline[i].attribute & 0x03) + 0x04);
-                        fg_priority = (spriteScanline[i].attribute & 0x20) == 0 ? 1 : 0;
-
-                        // If pixel is not transparent, we render it, and dont
-                        // bother checking the rest because the earlier sprites
-                        // in the list are higher priority
-                        if (fg_pixel != 0)
+                        // Scanline cycle has "collided" with sprite, shifters taking over
+                        if (spriteScanline[i].x == 0)
                         {
-                            if (i == 0) // Is this sprite zero?
-                            {
-                                bSpriteZeroBeingRendered = true;
-                            }
+                            // Note Fine X scrolling does not apply to sprites, the game
+                            // should maintain their relationship with the background. So
+                            // we'll just use the MSB of the shifter
 
-                            break;
+                            // Determine the pixel value...
+                            byte fg_pixel_lo = (sprite_shifter_pattern_lo[i] & 0x80) > 0 ? 1 : 0;
+                            byte fg_pixel_hi = (sprite_shifter_pattern_hi[i] & 0x80) > 0 ? 1 : 0;
+                            fg_pixel = (byte)((fg_pixel_hi << 1) | fg_pixel_lo);
+
+                            // Extract the palette from the bottom two bits. Recall
+                            // that foreground palettes are the latter 4 in the 
+                            // palette memory.
+                            fg_palette = (byte)((spriteScanline[i].attribute & 0x03) + 0x04);
+                            fg_priority = (spriteScanline[i].attribute & 0x20) == 0 ? 1 : 0;
+
+                            // If pixel is not transparent, we render it, and dont
+                            // bother checking the rest because the earlier sprites
+                            // in the list are higher priority
+                            if (fg_pixel != 0)
+                            {
+                                if (i == 0) // Is this sprite zero?
+                                {
+                                    bSpriteZeroBeingRendered = true;
+                                }
+
+                                break;
+                            }
                         }
                     }
                 }
@@ -1592,7 +1601,7 @@ namespace NESharp.Components
                         // The left edge of the screen has specific switches to control
                         // its appearance. This is used to smooth inconsistencies when
                         // scrolling (since sprites x coord must be >= 0)
-                        if ((~((mask[maskRenderBackgroundLeft] ? 1 : 0) | (mask[maskRenderSpritesLeft] ? 1 : 0))) != 0)
+                        if (!(mask[maskRenderBackgroundLeft] | mask[maskRenderSpritesLeft]))
                         {
                             if (cycle >= 9 && cycle < 258)
                             {
@@ -1616,6 +1625,14 @@ namespace NESharp.Components
 
             // Advance renderer - it never stops, it's relentless
             cycle++;
+            if (mask[maskRenderBackground] || mask[maskRenderSprites])
+            {
+                if (cycle == 260 && scanline < 240)
+                {
+                    cartridge.GetMapper().Scanline();
+                }
+            }
+
             if (cycle >= 341)
             {
                 cycle = 0;
@@ -1624,6 +1641,7 @@ namespace NESharp.Components
                 {
                     scanline = -1;
                     HasCompletedFrame = true;
+                    odd_frame = !odd_frame;
                 }
             }
         }

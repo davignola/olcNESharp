@@ -60,77 +60,77 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
+using NESharp.Components;
 
 namespace NESharp.Mapper
 {
-    public class Mapper000 : MapperBase
+    public class Mapper002 : MapperBase
     {
-        public Mapper000(byte prgBanks, byte chrBanks) : base(prgBanks, chrBanks)
+
+        byte nPRGBankSelectLo = 0x00;
+        byte nPRGBankSelectHi = 0x00;
+
+        public Mapper002(byte prgBanks, byte chrBanks) : base(prgBanks, chrBanks)
         {
         }
 
-        /// <summary>
-        /// if PRGROM is 16KB
-        ///     CPU Address Bus          PRG ROM
-        ///     0x8000 -> 0xBFFF: Map    0x0000 -> 0x3FFF
-        ///     0xC000 -> 0xFFFF: GetMirror 0x0000 -> 0x3FFF
-        /// if PRGROM is 32KB
-        ///     CPU Address Bus          PRG ROM
-        ///     0x8000 -> 0xFFFF: Map    0x0000 -> 0x7FFF
-        /// </summary>
-        /// <param name="address"></param>
-        /// <param name="mapped_address"></param>
-        /// <returns></returns>
-        private bool MapCpu(ushort address, ref uint mapped_address)
+
+        public override bool CpuMapRead(ushort address, ref uint mapped_address, ref byte data)
         {
-            if (address >= 0x8000 && address <= 0xFFFF)
+            if (address >= 0x8000 && address <= 0xBFFF)
             {
-                mapped_address = (uint)(address & (prgBanks > 1 ? 0x7FFF : 0x3FFF));
+                mapped_address = (uint)(nPRGBankSelectLo * 0x4000 + (address & 0x3FFF));
+                return true;
+            }
+
+            if (address >= 0xC000 && address <= 0xFFFF)
+            {
+                mapped_address = (uint)(nPRGBankSelectHi * 0x4000 + (address & 0x3FFF));
                 return true;
             }
 
             return false;
-        }
-
-        public override bool CpuMapRead(ushort address, ref uint mapped_address, ref byte data)
-        {
-            return MapCpu(address, ref mapped_address);
-        }
+		}
 
         public override bool CpuMapWrite(ushort address, ref uint mapped_address, byte data)
         {
-            return MapCpu(address, ref mapped_address);
-        }
+            if (address >= 0x8000 && address <= 0xFFFF)
+            {
+                nPRGBankSelectLo = (byte)(data & 0x0F);
+            }
+
+            // Mapper has handled write, but do not update ROMs
+            return false;
+		}
 
         public override bool PpuMapRead(ushort address, ref uint mapped_address)
         {
-            if (address >= 0x0000 && address <= 0x1FFF)
+            if (address < 0x2000)
             {
                 mapped_address = address;
                 return true;
             }
-
-            return false;
-        }
+            else
+                return false;
+		}
 
         public override bool PpuMapWrite(ushort address, ref uint mapped_address)
         {
-            if (address >= 0x0000 && address <= 0x1FFF)
+            if (address < 0x2000)
             {
-                if (chrBanks == 0)
+                if (chrBanks == 0) // Treating as RAM
                 {
-                    // Treat as RAM
                     mapped_address = address;
                     return true;
                 }
             }
-
             return false;
-        }
+		}
 
         public override void Reset()
         {
-
+            nPRGBankSelectLo = 0;
+            nPRGBankSelectHi = (byte)(prgBanks - 1);
         }
     }
 }
