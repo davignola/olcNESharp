@@ -60,10 +60,11 @@ using System.Collections.Generic;
 using System.Linq;
 using System.Text;
 using System.Xml;
+using NESharp.Components.Interfaces;
 
 namespace NESharp.Components
 {
-    public sealed partial class Cpu6502 : IConnectableDevice
+    public sealed partial class Cpu6502
     {
         // This is the disassembly function. Its workings are not required for emulation.
         // It is merely a convenience function to turn the binary instruction code into

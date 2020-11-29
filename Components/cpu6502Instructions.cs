@@ -64,7 +64,7 @@ using System.Xml;
 
 namespace NESharp.Components
 {
-    public sealed partial class Cpu6502 : IConnectableDevice
+    public sealed partial class Cpu6502 
     {
 
         #region Address mode functions

@@ -115,7 +115,7 @@ namespace NESharp.Mapper
             return false;
         }
 
-        public override void Reset()
+        public override void Reset(bool hardReset = false)
         {
             nCHRBankSelect = 0;
             nPRGBankSelect = 0;

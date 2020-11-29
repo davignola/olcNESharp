@@ -12,6 +12,7 @@ namespace NESharp.Mapper
         protected byte prgBanks { get; set; } = 0;
         protected byte chrBanks { get; set; } = 0;
 
+
         public virtual Cartridge.MIRROR Mirror { get; protected set; } = Cartridge.MIRROR.HARDWARE;
         public virtual bool IrqState { get; protected set; } = false;
 
@@ -28,17 +29,17 @@ namespace NESharp.Mapper
         public abstract bool PpuMapRead(ushort address, ref uint mapped_address);
 
         public abstract bool PpuMapWrite(ushort address, ref uint mapped_address);
-        public abstract void Reset();
+        public virtual void Reset(bool hardReset = false) { }
 
 
         public virtual void IrqClear()
         {
-            
+
         }
 
         public virtual void Scanline()
         {
-            
+
         }
     }
 }

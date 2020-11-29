@@ -62,11 +62,12 @@ using System.Linq;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
+using NESharp.Components.Interfaces;
 using NESharp.Mapper;
 
 namespace NESharp.Components
 {
-    public class Cartridge
+    public class Cartridge : IResetableDevice
     {
         public const int INES_HEADER_SIZE = 16;
 
@@ -276,11 +277,11 @@ namespace NESharp.Components
             return false;
         }
 
-        public void Reset()
+        public void Reset(bool hardReset = false)
         {
             // Note: This does not reset the ROM contents,
             // but does reset the mapper.
-            pMapper?.Reset();
+            pMapper?.Reset(hardReset);
         }
 
         public MIRROR GetMirror()

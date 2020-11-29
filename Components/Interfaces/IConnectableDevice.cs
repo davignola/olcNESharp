@@ -4,7 +4,7 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 
-namespace NESharp.Components
+namespace NESharp.Components.Interfaces
 {
     public interface IConnectableDevice : IIODevice
     {

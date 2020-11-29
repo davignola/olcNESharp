@@ -63,11 +63,12 @@ using System.Runtime.CompilerServices;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Threading.Tasks;
-using olc.wrapper;
+using NESharp.Components.Interfaces;
+using olc.managed;
 
 namespace NESharp.Components
 {
-    public sealed class Ppu2C02 : IConnectableDevice
+    public sealed class Ppu2C02 : IChip
     {
 
         #region Status "Structs"

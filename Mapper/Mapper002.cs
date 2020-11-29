@@ -127,7 +127,7 @@ namespace NESharp.Mapper
             return false;
 		}
 
-        public override void Reset()
+        public override void Reset(bool hardReset = false)
         {
             nPRGBankSelectLo = 0;
             nPRGBankSelectHi = (byte)(prgBanks - 1);

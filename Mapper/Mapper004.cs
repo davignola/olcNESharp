@@ -315,7 +315,7 @@ namespace NESharp.Mapper
             return false;
         }
 
-        public override void Reset()
+        public override void Reset(bool hardReset = false)
         {
             nTargetRegister = 0x00;
             bPRGBankMode = false;
@@ -328,13 +328,19 @@ namespace NESharp.Mapper
             nIRQCounter = 0x0000;
             nIRQReload = 0x0000;
 
-            for (int i = 0; i < 4; i++) pPRGBank[i] = 0;
-            for (int i = 0; i < 8; i++) { pCHRBank[i] = 0; pRegister[i] = 0; }
+            Array.Clear(pCHRBank, 0, pCHRBank.Length);
+            Array.Clear(pRegister, 0, pRegister.Length);
 
             pPRGBank[0] = 0 * 0x2000;
             pPRGBank[1] = 1 * 0x2000;
             pPRGBank[2] = (uint)((prgBanks * 2 - 2) * 0x2000);
             pPRGBank[3] = (uint)((prgBanks * 2 - 1) * 0x2000);
+
+            if (hardReset)
+            {
+                Array.Clear(vRAMStatic,0,vRAMStatic.Length);
+            }
+
         }
 
         public override bool IrqState

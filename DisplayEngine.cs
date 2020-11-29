@@ -62,7 +62,8 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using NESharp.Components;
-using olc.wrapper;
+using Nito.Collections;
+using olc.managed;
 
 namespace NESharp
 {
@@ -76,9 +77,32 @@ namespace NESharp
         private byte nSelectedPalette = 0x00;
         private bool breakFrameCycle = false;
 
+        Deque<ushort>[] audio = new Deque<ushort>[4];
+        float fAccumulatedTime = 0.0f;
+
+        private ViewMode currentvireViewMode = ViewMode.Graphics;
+
+        public enum ViewMode : byte
+        {
+            Code = 0,
+            Graphics = 1,
+            Audio = 2
+        }
+
         string hex(uint n, byte d)
         {
             return $"{n:X2}";
+        }
+
+        void DrawAudio(int channel, int x, int y)
+        {
+            FillRect(x, y, 120, 120, PixelColor.BLACK);
+            int i = 0;
+            foreach (var s in audio[channel])
+            {
+                Draw(x + i, y + (s >> (channel == 2 ? 5 : 4)), PixelColor.YELLOW);
+                i++;
+            }
         }
 
         private void DrawRam(int x, int y, ushort nAddr, int nRows, int nColumns)
@@ -175,10 +199,32 @@ namespace NESharp
             DrawSprite(648, 348, nes.Ppu2C02.GetPatternTable(1, nSelectedPalette));
         }
 
+        // This function is called by the underlying sound hardware
+        // which runs in a different thread. It is automatically
+        // synchronised with the sample rate of the sound card, and
+        // expects a single "sample" to be returned, whcih ultimately
+        // makes its way to your speakers, and then your ears, for that
+        // lovely 8-bit bliss... but, that means we've some thread
+        // handling to deal with, since we want both the PGE thread
+        // and the sound system thread to interact with the emulator.
+
+        static DisplayEngine pInstance; // Static variable that will hold a pointer to "this"
+
+        static float SoundOut(int nChannel, float fGlobalTime, float fTimeStep)
+        {
+            if (nChannel == 0)
+            {
+                while (!pInstance.nes.Clock()) { };
+                return (float)pInstance.nes.dAudioSample;
+            }
+            else
+                return 0.0f;
+        }
+
         public override bool OnUserCreate()
         {
             // Load the cartridge
-            cartridge = new Cartridge("../../../../TestRoms/nestest.nes");
+            cartridge = new Cartridge("../../../../TestRoms/mario.nes");
             if (!cartridge.IsImageValid) { return false; }
 
             // Insert into NES
@@ -187,13 +233,54 @@ namespace NESharp
             // Extract dissassembly
             mapAsm = nes.Cpu6502.Disassemble(0x8000, 0xFFFF);
 
+            // Init channels
+            for (var i = 0; i < audio.Length; i++)
+            {
+                audio[i] = new Deque<ushort>();
+                for (int j = 0; j < 120; j++)
+                    audio[i].AddToBack(0);
+            }
+
             nes.Reset();
+
+            // Initialise PGEX sound system, and give it a function to 
+            // call which returns a sound sample on demand
+            pInstance = this;
+            nes.SetSampleFrequency(44100);
+            olcPGEXSoundManaged.InitialiseAudio(44100, 1, 8, 512);
+            olcPGEXSoundManaged.SetUserSynthFunction(SoundOut);
             return true;
         }
 
 
         public override bool OnUserUpdate(float fElapsedTime)
         {
+            return EmulatorUpdateWithAudio(fElapsedTime);
+        }
+
+        /// <summary>
+        /// This performs an emulation update but synced to audio, so it cant
+        /// perform stepping through code or frames. Essentially, it runs
+        /// the emulation in real time now, so only accepts "controller" input
+        /// and updates the display
+        /// </summary>
+        /// <param name="fElapsedTime"></param>
+        /// <returns></returns>
+        private bool EmulatorUpdateWithAudio(float fElapsedTime)
+        {
+            // Sample audio channel output roughly once per frame
+            fAccumulatedTime += fElapsedTime;
+            if (fAccumulatedTime >= 1.0f / 60.0f)
+            {
+                fAccumulatedTime -= (1.0f / 60.0f);
+                audio[0].RemoveFromFront();
+                audio[0].AddToBack(nes.Apu2A03.pulse1_visual);
+                audio[1].RemoveFromFront();
+                audio[1].AddToBack(nes.Apu2A03.pulse2_visual);
+                audio[2].RemoveFromFront();
+                audio[2].AddToBack(nes.Apu2A03.noise_visual);
+            }
+
             Clear(PixelColor.DARK_BLUE);
 
             // Sneaky peek of controller input in next video! ;P
@@ -207,11 +294,6 @@ namespace NESharp
             nes.Controller[0] |= GetKey(KeyManaged.LEFT).bHeld() ? 0x02 : 0x00;
             nes.Controller[0] |= GetKey(KeyManaged.RIGHT).bHeld() ? 0x01 : 0x00;
 
-            if (GetKey(KeyManaged.SPACE).bPressed())
-            {
-                emulationRun = !emulationRun;
-                breakFrameCycle = false;
-            }
             if (GetKey(KeyManaged.R).bPressed()) nes.Reset();
             // Hard reset (Power cycle)
             if (GetKey(KeyManaged.H).bPressed()) nes.Reset(true);
@@ -235,70 +317,63 @@ namespace NESharp
                 };
             }
 
-
-            if (emulationRun)
+            // Cycle view mode
+            if (GetKey(KeyManaged.V).bPressed())
             {
-                if (fResidualTime > 0.0f)
-                    fResidualTime -= fElapsedTime;
+                if (currentvireViewMode == ViewMode.Audio)
+                {
+                    currentvireViewMode = ViewMode.Code;
+                }
                 else
                 {
-                    fResidualTime += (1.0f / 60.0f) - fElapsedTime;
-                    do { nes.Clock(); } while (!nes.Ppu2C02.HasCompletedFrame && !breakFrameCycle);
-                    nes.Ppu2C02.HasCompletedFrame = false;
+                    currentvireViewMode++;
                 }
             }
-            else
-            {
-                // Emulate code step-by-step
-                if (GetKey(KeyManaged.C).bPressed())
-                {
-                    // Clock enough times to execute a whole CPU instruction
-                    do { nes.Clock(); } while (!nes.Cpu6502.HasCompletedCycle);
-                    // CPU clock runs slower than system clock, so it may be
-                    // complete for additional system clock cycles. Drain
-                    // those out
-                    do { nes.Clock(); } while (nes.Cpu6502.HasCompletedCycle);
-                }
-
-                // Emulate one whole frame
-                if (GetKey(KeyManaged.F).bPressed())
-                {
-                    // Clock enough times to draw a single frame
-                    do { nes.Clock(); } while (!nes.Ppu2C02.HasCompletedFrame);
-                    // Use residual clock cycles to complete current instruction
-                    do { nes.Clock(); } while (!nes.Cpu6502.HasCompletedCycle);
-                    // Reset frame completion flag
-                    nes.Ppu2C02.HasCompletedFrame = false;
-                }
-            }
-
 
             DrawCpu(516, 2);
 
             if (nes.Cpu6502.DebugEnabled)
             {
 
-                DrawCode(516, 72, 26);
                 // Draw Ram Page 0x00		
                 DrawRam(2, 2, 0x0000, 16, 16);
                 DrawRam(2, 182, 0x8000, 16, 16);
             }
             else
             {
-                DrawGraphicsData();
-
                 // Draw rendered output ========================================================
                 DrawSprite(0, 0, nes.Ppu2C02.GetScreen(), 2);
             }
 
-
+            switch (currentvireViewMode)
+            {
+                default:
+                case ViewMode.Code:
+                    DrawCode(516, 72, 26);
+                    break;
+                case ViewMode.Graphics:
+                    DrawGraphicsData();
+                    break;
+                case ViewMode.Audio:
+                    // Draw AUDIO Channels
+                    DrawAudio(0, 520, 72);
+                    DrawAudio(1, 644, 72);
+                    DrawAudio(2, 520, 196);
+                    DrawAudio(3, 644, 196);
+                    break;
+            }
+            
             return true;
-
         }
 
-
+        /// <summary>
+        ///  We must play nicely now with the sound hardware, so unload
+        /// it when the application terminates
+        /// </summary>
+        /// <returns></returns>
         public override bool OnUserDestroy()
         {
+            olcPGEXSoundManaged.DestroyAudio();
             return true;
         }
     }

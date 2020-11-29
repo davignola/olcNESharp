@@ -16,6 +16,10 @@
   </ItemGroup>
 
   <ItemGroup>
+    <PackageReference Include="Nito.Collections.Deque" Version="1.1.0" />
+  </ItemGroup>
+
+  <ItemGroup>
     <Reference Include="olcPixelgameEngineManaged">
       <HintPath>olcPixelgameEngineManaged.dll</HintPath>
     </Reference>

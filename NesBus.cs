@@ -61,10 +61,11 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using NESharp.Components;
+using NESharp.Components.Interfaces;
 
 namespace NESharp
 {
-    public sealed class NesBus : IIODevice
+    public sealed class NesBus : IIODevice, IResetableDevice
     {
         private int SystemClockCounter { get; set; } = 0;
         // A simple form of Direct Memory Access is used to swiftly
@@ -75,35 +76,61 @@ namespace NESharp
         // CPU momentarily while the PPU gets sent data at PPU clock speeds.
         // Note here, that dma_page and dma_addr form a 16-bit address in 
         // the CPU bus address space
-        byte dma_page = 0x00;
-        byte dma_addr = 0x00;
-        byte dma_data = 0x00;
+        private byte dma_page = 0x00;
+        private byte dma_addr = 0x00;
+        private byte dma_data = 0x00;
+
+        private double dAudioTime = 0.0;
+        private double dAudioGlobalTime = 0.0;
+        private double dAudioTimePerNESClock = 0.0;
+        private double dAudioTimePerSystemSample = 0.0f;
 
         // DMA transfers need to be timed accurately. In principle it takes
         // 512 cycles to read and write the 256 bytes of the OAM memory, a
         // read followed by a write. However, the CPU needs to be on an "even"
         // clock cycle, so a dummy cycle of idleness may be required
-        bool dma_dummy = true;
+        private bool dma_dummy = true;
 
         // Finally a flag to indicate that a DMA transfer is happening
-        bool dma_transfer = false;
+        private bool dma_transfer = false;
+
+        // The 6502 derived processor
         public Cpu6502 Cpu6502 { get; private set; }
+
+        // The 2C02 Picture Processing Unit
         public Ppu2C02 Ppu2C02 { get; private set; }
+
+        // The "2A03" Audio Processing Unit
+        public Apu2A03 Apu2A03 { get; private set; }
+
         public List<byte> Ram { get; private set; }
         public Cartridge Cartridge { get; private set; }
+
+        // Synchronisation with system Audio
+        public double dAudioSample = 0.0;
 
         // Controllers
         public byte[] Controller { get; set; }
         public byte[] ControllerState { get; set; }
 
+        public List<IResetableDevice> Devices { get; private set; }
+
         public NesBus()
         {
+            Devices = new List<IResetableDevice>();
+
             // Connect devices
             Cpu6502 = new Cpu6502();
             Cpu6502.ConnectBus(this);
+            Devices.Add(Cpu6502);
 
             Ppu2C02 = new Ppu2C02();
             Ppu2C02.ConnectBus(this);
+            Devices.Add(Ppu2C02);
+
+            Apu2A03 = new Apu2A03();
+            Apu2A03.ConnectBus(this);
+            Devices.Add(Apu2A03);
 
             // init 2k RAM
             Ram = Enumerable.Repeat((byte)0, 2 * 1024).ToList();
@@ -117,6 +144,7 @@ namespace NESharp
         {
             Cartridge = cartridge;
             Ppu2C02.ConnectCartridge(cartridge);
+            Devices.Add(Cartridge);
         }
 
         public void Reset(bool hardReset = false)
@@ -126,9 +154,8 @@ namespace NESharp
                 Ram = Enumerable.Repeat((byte)0, 2 * 1024).ToList();
             }
 
-            Cartridge.Reset();
-            Cpu6502.Reset();
-            Ppu2C02.Reset(hardReset);
+            Devices.ForEach(fe => fe.Reset(hardReset));
+
             SystemClockCounter = 0;
             dma_page = 0x00;
             dma_addr = 0x00;
@@ -137,7 +164,7 @@ namespace NESharp
             dma_transfer = false;
         }
 
-        public void Clock()
+        public bool Clock()
         {
             // Clocking. The heart and soul of an emulator. The running
             // frequency is controlled by whatever calls this function.
@@ -147,8 +174,11 @@ namespace NESharp
 
             // The fastest clock frequency the digital system cares
             // about is equivalent to the PPU clock. So the PPU is clocked
-            // each time this function is called.
+            // each time this function is called...
             Ppu2C02.Clock();
+
+            // ...also clock the APU
+            Apu2A03.Clock();
 
             // The CPU runs 3 times slower than the PPU so we only call its
             // clock() function every 3 times this function is called. We
@@ -205,6 +235,17 @@ namespace NESharp
                 }
             }
 
+            // Synchronising with Audio
+            bool bAudioSampleReady = false;
+            dAudioTime += dAudioTimePerNESClock;
+            if (dAudioTime >= dAudioTimePerSystemSample)
+            {
+                dAudioTime -= dAudioTimePerSystemSample;
+                dAudioSample = Apu2A03.GetOutputSample();
+                bAudioSampleReady = true;
+            }
+
+
             // The PPU is capable of emitting an interrupt to indicate the
             // vertical blanking period has been entered. If it has, we need
             // to send that irq to the CPU.
@@ -220,8 +261,16 @@ namespace NESharp
                 Cartridge.GetMapper().IrqClear();
                 Cpu6502.IRQ();
             }
-            
+
             SystemClockCounter++;
+
+            return bAudioSampleReady;
+        }
+
+        public void SetSampleFrequency(uint sample_rate)
+        {
+            dAudioTimePerSystemSample = 1.0 / (double)sample_rate;
+            dAudioTimePerNESClock = 1.0 / 5369318.0; // PPU Clock Frequency
         }
 
         public void CpuWrite(ushort address, byte data)
@@ -250,6 +299,10 @@ namespace NESharp
                 // use bitwise AND operation to mask the bottom 3 bits, 
                 // which is the equivalent of addr % 8.
                 Ppu2C02.CpuWrite((ushort)(address & 0x0007), data);
+            }
+            else if ((address >= 0x4000 && address <= 0x4013) || address == 0x4015 || address == 0x4017) //  NES APU
+            {
+                Apu2A03.CpuWrite(address, data);
             }
             else if (address == 0x4014)
             {
@@ -282,6 +335,11 @@ namespace NESharp
             {
                 // PPU Address range, mirrored every 8
                 data = Ppu2C02.CpuRead((ushort)(address & 0x0007), asReadOnly);
+            }
+            else if (address == 0x4015)
+            {
+                // APU Read Status
+                data = Apu2A03.CpuRead(address, asReadOnly);
             }
             else if (address >= 0x4016 && address <= 0x4017)
             {

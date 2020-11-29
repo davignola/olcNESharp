@@ -63,10 +63,11 @@ using System.Linq;
 using System.Text;
 using System.Threading.Tasks;
 using System.Xml;
+using NESharp.Components.Interfaces;
 
 namespace NESharp.Components
 {
-    public sealed partial class Cpu6502 : IConnectableDevice
+    public sealed partial class Cpu6502 : IChip
     {
         #region Constants
 
@@ -203,7 +204,7 @@ namespace NESharp.Components
         /// allows the programmer to jump to a known and programmable location in the
         /// memory to start executing from. Typically the programmer would set the value
         /// </summary>
-        public void Reset()
+        public void Reset(bool hardReset = false)
         {
             // Get address to set program counter to
             // This is stored little indian starting at 0xFFFC 

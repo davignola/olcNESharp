@@ -299,8 +299,13 @@ namespace NESharp.Mapper
                 return false;
         }
 
-        public override void Reset()
+        public override void Reset(bool hardReset = false)
         {
+            if (hardReset)
+            {
+                Array.Clear(vRAMStatic,0,vRAMStatic.Length);
+            }
+
             nControlRegister = 0x1C;
             nLoadRegister = 0x00;
             nLoadRegisterCount = 0x00;
