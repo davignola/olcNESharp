@@ -285,25 +285,25 @@ namespace NESharp
 
             // Sneaky peek of controller input in next video! ;P
             nes.Controller[0] = 0x00;
-            nes.Controller[0] |= GetKey(KeyManaged.X).bHeld() ? 0x80 : 0x00;
-            nes.Controller[0] |= GetKey(KeyManaged.Z).bHeld() ? 0x40 : 0x00;
-            nes.Controller[0] |= GetKey(KeyManaged.A).bHeld() ? 0x20 : 0x00;
-            nes.Controller[0] |= GetKey(KeyManaged.S).bHeld() ? 0x10 : 0x00;
-            nes.Controller[0] |= GetKey(KeyManaged.UP).bHeld() ? 0x08 : 0x00;
-            nes.Controller[0] |= GetKey(KeyManaged.DOWN).bHeld() ? 0x04 : 0x00;
-            nes.Controller[0] |= GetKey(KeyManaged.LEFT).bHeld() ? 0x02 : 0x00;
-            nes.Controller[0] |= GetKey(KeyManaged.RIGHT).bHeld() ? 0x01 : 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.X).bHeld ? 0x80 : 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.Z).bHeld ? 0x40 : 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.A).bHeld ? 0x20 : 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.S).bHeld ? 0x10 : 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.UP).bHeld ? 0x08 : 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.DOWN).bHeld ? 0x04 : 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.LEFT).bHeld ? 0x02 : 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.RIGHT).bHeld ? 0x01 : 0x00;
 
-            if (GetKey(KeyManaged.R).bPressed()) nes.Reset();
+            if (GetKey(KeyManaged.R).bPressed) nes.Reset();
             // Hard reset (Power cycle)
-            if (GetKey(KeyManaged.H).bPressed()) nes.Reset(true);
-            if (GetKey(KeyManaged.P).bPressed())
+            if (GetKey(KeyManaged.H).bPressed) nes.Reset(true);
+            if (GetKey(KeyManaged.P).bPressed)
             {
                 nSelectedPalette++;
                 nSelectedPalette &= 0x07;
             }
 
-            if (GetKey(KeyManaged.T).bPressed())
+            if (GetKey(KeyManaged.T).bPressed)
             {
                 // enter nestest in no graphics mode
                 nes.Reset(true);
@@ -318,7 +318,7 @@ namespace NESharp
             }
 
             // Cycle view mode
-            if (GetKey(KeyManaged.V).bPressed())
+            if (GetKey(KeyManaged.V).bPressed)
             {
                 if (currentvireViewMode == ViewMode.Audio)
                 {
