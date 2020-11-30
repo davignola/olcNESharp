@@ -76,6 +76,8 @@ namespace NESharp
         private float fResidualTime = 0.0f;
         private byte nSelectedPalette = 0x00;
         private bool breakFrameCycle = false;
+        private vf2dm decalOrigin = new vf2dm();
+        private vf2dm decalScale = new vf2dm(2f, 2f);
 
         Deque<ushort>[] audio = new Deque<ushort>[4];
         float fAccumulatedTime = 0.0f;
@@ -224,7 +226,7 @@ namespace NESharp
         public override bool OnUserCreate()
         {
             // Load the cartridge
-            cartridge = new Cartridge("../../../../TestRoms/mario.nes");
+            cartridge = new Cartridge("../../../../TestRoms/nestest.nes");
             if (!cartridge.IsImageValid) { return false; }
 
             // Insert into NES
@@ -342,7 +344,7 @@ namespace NESharp
             else
             {
                 // Draw rendered output ========================================================
-                DrawSprite(0, 0, nes.Ppu2C02.GetScreen(), 2);
+                DrawDecal(decalOrigin, new DecalManaged(nes.Ppu2C02.GetScreen()), decalScale);
             }
 
             switch (currentvireViewMode)
@@ -362,7 +364,7 @@ namespace NESharp
                     DrawAudio(3, 644, 196);
                     break;
             }
-            
+
             return true;
         }
 
