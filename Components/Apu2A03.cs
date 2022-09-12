@@ -540,9 +540,9 @@ namespace NESharp.Components
             pulse1_sweep.Track(pulse1_seq.reload);
             pulse2_sweep.Track(pulse2_seq.reload);
 
-            pulse1_visual = (pulse1_enable && pulse1_env.output > 1 && !pulse1_sweep.mute) ? pulse1_seq.reload : 2047;
-            pulse2_visual = (pulse2_enable && pulse2_env.output > 1 && !pulse2_sweep.mute) ? pulse2_seq.reload : 2047;
-            noise_visual = (noise_enable && noise_env.output > 1) ? noise_seq.reload : 2047;
+            pulse1_visual = (pulse1_enable && pulse1_env.output > 1 && !pulse1_sweep.mute) ? pulse1_seq.reload : (ushort)2047;
+            pulse2_visual = (pulse2_enable && pulse2_env.output > 1 && !pulse2_sweep.mute) ? pulse2_seq.reload : (ushort)2047;
+            noise_visual = (noise_enable && noise_env.output > 1) ? noise_seq.reload : (ushort)2047;
 
             clock_counter++;
         }

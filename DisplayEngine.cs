@@ -226,7 +226,7 @@ namespace NESharp
         public override bool OnUserCreate()
         {
             // Load the cartridge
-            cartridge = new Cartridge("../../../../TestRoms/nestest.nes");
+            cartridge = new Cartridge("../../../../TestRoms/kirby.nes");
             if (!cartridge.IsImageValid) { return false; }
 
             // Insert into NES
@@ -287,14 +287,14 @@ namespace NESharp
 
             // Sneaky peek of controller input in next video! ;P
             nes.Controller[0] = 0x00;
-            nes.Controller[0] |= GetKey(KeyManaged.X).bHeld ? 0x80 : 0x00;
-            nes.Controller[0] |= GetKey(KeyManaged.Z).bHeld ? 0x40 : 0x00;
-            nes.Controller[0] |= GetKey(KeyManaged.A).bHeld ? 0x20 : 0x00;
-            nes.Controller[0] |= GetKey(KeyManaged.S).bHeld ? 0x10 : 0x00;
-            nes.Controller[0] |= GetKey(KeyManaged.UP).bHeld ? 0x08 : 0x00;
-            nes.Controller[0] |= GetKey(KeyManaged.DOWN).bHeld ? 0x04 : 0x00;
-            nes.Controller[0] |= GetKey(KeyManaged.LEFT).bHeld ? 0x02 : 0x00;
-            nes.Controller[0] |= GetKey(KeyManaged.RIGHT).bHeld ? 0x01 : 0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.X).bHeld ? (byte)0x80 : (byte)0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.Z).bHeld ? (byte)0x40 : (byte)0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.A).bHeld ? (byte)0x20 : (byte)0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.S).bHeld ? (byte)0x10 : (byte)0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.UP).bHeld ? (byte)0x08 : (byte)0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.DOWN).bHeld ? (byte)0x04 : (byte)0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.LEFT).bHeld ? (byte)0x02 : (byte)0x00;
+            nes.Controller[0] |= GetKey(KeyManaged.RIGHT).bHeld ? (byte)0x01 : (byte)0x00;
 
             if (GetKey(KeyManaged.R).bPressed) nes.Reset();
             // Hard reset (Power cycle)

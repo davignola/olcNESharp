@@ -344,7 +344,7 @@ namespace NESharp
             else if (address >= 0x4016 && address <= 0x4017)
             {
                 // Read out the MSB of the controller status word
-                data = (ControllerState[address & 0x0001] & 0x80) > 0 ? 1 : 0;
+                data = (ControllerState[address & 0x0001] & 0x80) > 0 ? (byte)1 : (byte)0;
                 ControllerState[address & 0x0001] <<= 1;
             }
 

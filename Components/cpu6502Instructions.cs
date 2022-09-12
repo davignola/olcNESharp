@@ -64,7 +64,7 @@ using System.Xml;
 
 namespace NESharp.Components
 {
-    public sealed partial class Cpu6502 
+    public sealed partial class Cpu6502
     {
 
         #region Address mode functions
@@ -585,12 +585,15 @@ namespace NESharp.Components
         {
             Pc++;
 
-            SetFlag(FLAGS6502.I, true);
             PushPcOnStack();
 
             SetFlag(FLAGS6502.B, true);
             PushStack((byte)Status);
             SetFlag(FLAGS6502.B, false);
+
+            // After writing to the stack, set the Interupt flag to 1
+            // to prevent other interrupts
+            SetFlag(FLAGS6502.I, true);
 
             Pc = ReadAsAddress(IRQ_PC_START_ADDRESS);
             return 0;

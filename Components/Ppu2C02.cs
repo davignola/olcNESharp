@@ -1478,15 +1478,15 @@ namespace NESharp.Components
 
                     // Select Plane pixels by extracting from the shifter 
                     // at the required location. 
-                    byte p0_pixel = (bg_shifter_pattern_lo & bit_mux) > 0 ? 1 : 0;
-                    byte p1_pixel = (bg_shifter_pattern_hi & bit_mux) > 0 ? 1 : 0;
+                    byte p0_pixel = (bg_shifter_pattern_lo & bit_mux) > 0 ? (byte)1 : (byte)0;
+                    byte p1_pixel = (bg_shifter_pattern_hi & bit_mux) > 0 ? (byte)1 : (byte)0;
 
                     // Combine to form pixel index
                     bg_pixel = (byte)((p1_pixel << 1) | p0_pixel);
 
                     // Get palette
-                    byte bg_pal0 = (bg_shifter_attrib_lo & bit_mux) > 0 ? 1 : 0;
-                    byte bg_pal1 = (bg_shifter_attrib_hi & bit_mux) > 0 ? 1 : 0;
+                    byte bg_pal0 = (bg_shifter_attrib_lo & bit_mux) > 0 ? (byte)1 : (byte)0;
+                    byte bg_pal1 = (bg_shifter_attrib_hi & bit_mux) > 0 ? (byte)1 : (byte)0;
                     bg_palette = (byte)((bg_pal1 << 1) | bg_pal0);
                 }
             }
@@ -1515,15 +1515,15 @@ namespace NESharp.Components
                             // we'll just use the MSB of the shifter
 
                             // Determine the pixel value...
-                            byte fg_pixel_lo = (sprite_shifter_pattern_lo[i] & 0x80) > 0 ? 1 : 0;
-                            byte fg_pixel_hi = (sprite_shifter_pattern_hi[i] & 0x80) > 0 ? 1 : 0;
+                            byte fg_pixel_lo = (sprite_shifter_pattern_lo[i] & 0x80) > 0 ? (byte)1 : (byte)0;
+                            byte fg_pixel_hi = (sprite_shifter_pattern_hi[i] & 0x80) > 0 ? (byte)1 : (byte)0;
                             fg_pixel = (byte)((fg_pixel_hi << 1) | fg_pixel_lo);
 
                             // Extract the palette from the bottom two bits. Recall
                             // that foreground palettes are the latter 4 in the 
                             // palette memory.
                             fg_palette = (byte)((spriteScanline[i].attribute & 0x03) + 0x04);
-                            fg_priority = (spriteScanline[i].attribute & 0x20) == 0 ? 1 : 0;
+                            fg_priority = (spriteScanline[i].attribute & 0x20) == 0 ? (byte)1 : (byte)0;
 
                             // If pixel is not transparent, we render it, and dont
                             // bother checking the rest because the earlier sprites
